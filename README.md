@@ -1,3 +1,15 @@
+To install dependencies for the pgm project use the conda file ```env.yaml```
+```
+conda env create -f env.yaml
+conda activate diffuser
+pip install -e .
+```
+The new files for the project 
+```
+srcipts/train_hf.py
+srcipts/plan_guided_hf.py
+
+```
 # Planning with Diffusion &nbsp;&nbsp; [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1YajKhu-CUIGBJeQPehjVPJcK_b38a8Nc?usp=sharing)
 
 
