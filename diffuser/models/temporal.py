@@ -62,6 +62,7 @@ class TemporalUnet(nn.Module):
         dims = [transition_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
         print(f'[ models/temporal ] Channel dimensions: {in_out}')
+        import pdb; pdb.set_trace()
 
         time_dim = dim
         self.time_mlp = nn.Sequential(
@@ -88,6 +89,7 @@ class TemporalUnet(nn.Module):
 
             if not is_last:
                 horizon = horizon // 2
+            import pdb; pdb.set_trace()
 
         mid_dim = dims[-1]
         self.mid_block1 = ResidualTemporalBlock(mid_dim, mid_dim, embed_dim=time_dim, horizon=horizon)
@@ -111,6 +113,7 @@ class TemporalUnet(nn.Module):
             Conv1dBlock(dim, dim, kernel_size=5),
             nn.Conv1d(dim, transition_dim, 1),
         )
+        import pdb; pdb.set_trace()
 
     def forward(self, x, cond, time):
         '''

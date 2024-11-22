@@ -40,7 +40,7 @@ renderer = diffusion_experiment.renderer
 value_function = value_experiment.ema
 guide_config = utils.Config(args.guide, model=value_function, verbose=False)
 guide = guide_config()
-
+# import pdb; pdb.set_trace()
 logger_config = utils.Config(
     utils.Logger,
     renderer=renderer,
@@ -50,6 +50,7 @@ logger_config = utils.Config(
 )
 
 ## policies are wrappers around an unconditional diffusion model and a value guide
+# import pdb; pdb.set_trace()
 policy_config = utils.Config(
     args.policy,
     guide=guide,
@@ -67,7 +68,7 @@ policy_config = utils.Config(
 
 logger = logger_config()
 policy = policy_config()
-
+# import pdb; pdb.set_trace()
 
 #-----------------------------------------------------------------------------#
 #--------------------------------- main loop ---------------------------------#
@@ -89,7 +90,10 @@ for t in range(args.max_episode_length):
 
     ## format current observation for conditioning
     conditions = {0: observation}
+    # import pdb; pdb.set_trace()
     action, samples = policy(conditions, batch_size=args.batch_size, verbose=args.verbose)
+    
+    
 
     ## execute action in environment
     next_observation, reward, terminal, _ = env.step(action)
