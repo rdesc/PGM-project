@@ -1,0 +1,41 @@
+name: diffuser2
+channels:
+- defaults
+- conda-forge
+dependencies:
+- python=3.8
+- pip=24.0
+- patchelf=0.17.2
+- setuptools=63.2.0
+- wheel=0.38.4
+- cython=0.29.36
+- pip:
+    - -f https://download.pytorch.org/whl/torch_stable.html
+    - numpy
+    - gym==0.18.0
+    - mujoco-py==2.0.2.8
+    - matplotlib==3.3.4
+    - typed-argument-parser
+    - git+https://github.com/Farama-Foundation/d4rl@f2a05c0d66722499bf8031b094d9af3aea7c372b#egg=d4rl
+    - scikit-image==0.17.2
+    - scikit-video==1.1.11
+    - gitpython
+    - einops
+    - ffmpeg
+    - ffprobe
+    - pillow
+    - tqdm
+    - pandas
+    - wandb
+    - ray==2.0.0
+    - crcmod # for fast gsutil rsync on large files
+    - google-api-python-client
+    - cryptography
+    - git+https://github.com/JannerM/doodad.git@janner
+    - gdown>=4.6.0
+    - diffusers==0.31.0
+    - accelerate==1.0.1
+    - jax==0.4.13
+    - jaxlib==0.4.13
+    - flax==0.7.2
+    - libstdcxx-ng==14.2.0
