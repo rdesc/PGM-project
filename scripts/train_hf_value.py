@@ -167,7 +167,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
         # After each epoch you optionally sample some demo images with evaluate() and save the model
         if accelerator.is_main_process:
-        #     pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
+            pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
 
             if (i + 1) % config.render_freq == 0:
                 print("=========== Rendering ==========")
@@ -176,11 +176,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 render_samples(config, model, renderer, dataset, accelerator,
                                noise_scheduler, savepath, config.eval_batch_size, use_pipeline=config.use_pipeline_for_render)
 
-        #     if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1:
-        #         if config.push_to_hub:
-        #             repo.push_to_hub(commit_message=f"Epoch {epoch}", blocking=True)
-        #         else:
-        #             pipeline.save_pretrained(config.output_dir)
+            if (i + 1) % 10_000 == 0:
+                print("Saving model....", "output_dir", config.output_dir, i+1, "loss", loss) 
+                pipeline.save_pretrained(config.output_dir, variant=str(i+1))
 
 
 if __name__ == "__main__":
