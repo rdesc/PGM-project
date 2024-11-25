@@ -75,11 +75,11 @@ def render_samples(config, model, renderer, dataset, accelerator, noise_schedule
 @dataclass
 class TrainingConfig:
     env_id = "hopper-medium-expert-v2"
-    train_batch_size = 128
+    train_batch_size = 32
     eval_batch_size = 1  # how many images to sample during evaluation
     num_epochs = 50
-    gradient_accumulation_steps = 1
-    learning_rate = 1e-4
+    gradient_accumulation_steps = 2
+    learning_rate = 2e-4
     lr_warmup_steps = 500
     save_image_epochs = 10
     render_freq = 200e3 +1
@@ -154,7 +154,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             loss = F.mse_loss(values_pred, values)
             accelerator.backward(loss)
 
-            accelerator.clip_grad_norm_(model.parameters(), 1.0)
+            # accelerator.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
@@ -184,7 +184,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 if __name__ == "__main__":
     config = TrainingConfig()
     # env_id = 
-    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer")
+    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100)
     train_dataloader = cycle(torch.utils.data.DataLoader(
         dataset, batch_size=config.train_batch_size, num_workers=1, shuffle=True, pin_memory=True
         ))
