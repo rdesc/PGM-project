@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from diffuser.datasets import SequenceDataset
 from diffusers import  UNet1DModel, DDPMScheduler
 from tqdm import tqdm
@@ -12,6 +12,9 @@ import torch.nn.functional as F
 from diffusers import DDPMPipeline
 import accelerate
 from diffuser.utils.rendering import MuJoCoRenderer
+import time
+import yaml
+import tyro
 
 def cycle(dl):
     while True:
@@ -21,19 +24,24 @@ def cycle(dl):
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def generate_samples(config, conditioning ,model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=2, use_pipeline=False):
+# def generate_samples(config, conditioning ,model, renderer, dataset, accelerator, scheduler, savepath ,n_samples=2, use_pipeline=False):
+def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeline=False):
     generator = torch.Generator(device=device)
     shape = (config.eval_batch_size, config.horizon, dataset.observation_dim + dataset.action_dim,)
     x = torch.randn(shape, device=device, generator=generator).to(device)
     if use_pipeline:
         for i, t in enumerate(scheduler.timesteps):
+            timesteps = torch.full((config.eval_batch_size,), t, device=device, dtype=torch.long)
             model_input = scheduler.scale_model_input(x, t)
             if config.use_conditioning_for_sampling:
-                x[:, 0, dataset.action_dim: ] = conditioning
+                # print('m', model_input.shape)
+                # print(t)
+                # print('c',conditioning.shape)
+                model_input[:, 0, dataset.action_dim: ] = conditioning
             with torch.no_grad():
                 noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
                 noise_pred = noise_pred.permute(0, 2, 1) # needed to match model params to original
-            x = scheduler.step(noise_pred, t, x)
+            x = scheduler.step(noise_pred, t, x).prev_sample
         if config.use_conditioning_for_sampling:
             x[:, 0, dataset.action_dim: ] = conditioning
         
@@ -76,41 +84,45 @@ def generate_samples(config, conditioning ,model, renderer, dataset, accelerator
     return x
 
 def render_samples(config, model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=2, use_pipeline=False, conditioning=None):
-    x = generate_samples(config, conditioning ,model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=n_samples, use_pipeline=use_pipeline)
-    # import pdb; pdb.set_trace()
+    x = generate_samples(config, conditioning ,model, dataset, noise_scheduler, use_pipeline=use_pipeline)
+    # x = generate_samples(config, conditioning ,model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=n_samples, use_pipeline=use_pipeline)
     observations = dataset.normalizer.unnormalize(x.cpu().numpy(), 'observations')
     renderer.composite(savepath, observations)
 
+def save_configs(configs, save_path):
+    file_path = f"{save_path}/config.yaml"
+    with open(file_path, 'w') as f:
+        f.write(yaml.dump(asdict(configs)))
 
 
 
 @dataclass
 class TrainingConfig:
-    env_id = "hopper-medium-expert-v2"
-    image_size = 128  # the generated image resolution
-    train_batch_size = 16
-    eval_batch_size = 1  # how many images to sample during evaluation
-    num_epochs = 50
-    gradient_accumulation_steps = 1
-    learning_rate = 1e-4
-    lr_warmup_steps = 500
-    save_image_epochs = 10
-    render_freq = 4200
-    save_model_epochs = 30
-    num_train_timesteps = 100
-    n_train_steps= 200e3
-    n_train_step_per_epoch = 10_000
-    mixed_precision = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
-    output_dir = "ddpm-butterflies-128"  # the model name locally and on the HF Hub
-    horizon = 128
-    push_to_hub = True  # whether to upload the saved model to the HF Hub
-    hub_private_repo = False
-    overwrite_output_dir = True  # overwrite the old model when re-running the notebook
-    seed = 0
-    use_sample_hf_for_render= False
-    add_training_conditioning = True
-    use_conditioning_for_sampling = True
-    checkpointing_freq = 4200
+    env_id: str = "hopper-medium-expert-v2"
+    image_size: int = 128  # the generated image resolution
+    train_batch_size: int = 16
+    eval_batch_size: int = 1  # how many images to sample during evaluation
+    num_epochs: int = 50
+    gradient_accumulation_steps: int = 1
+    learning_rate: int = 1e-4
+    lr_warmup_steps: int = 500
+    save_image_epochs: int = 10
+    render_freq: int = 4200
+    save_model_epochs: int = 30
+    num_train_timesteps: int = 100
+    n_train_steps: int = int(200e3)
+    n_train_step_per_epoch: int = 10_000
+    mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
+    output_dir: str = "ddpm-butterflies-128"  # the model name locally and on the HF Hub
+    horizon: int = 128
+    push_to_hub: bool = True  # whether to upload the saved model to the HF Hub
+    hub_private_repo: bool = False
+    overwrite_output_dir: bool = True  # overwrite the old model when re-running the notebook
+    seed: int = 0
+    use_sample_hf_for_render: bool= False
+    add_training_conditioning: bool = True
+    use_conditioning_for_sampling: bool = True
+    checkpointing_freq: int = 20_000
 
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer):
@@ -137,6 +149,17 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     )
 
     # global_step = 0
+    run_id = int(time.time())
+    save_path = f"runs/{config.env_id}/{run_id}"
+    os.makedirs(save_path, exist_ok=True)
+    while os.path.exists(save_path):
+        run_id = int(time.time())
+        save_path = f"runs/{config.env_id}/{run_id}"
+    checkpoint_path = f"{save_path}/checkpoints"
+    os.makedirs(checkpoint_path)
+    save_configs(config, save_path)
+    # save scheduler as well for evaluation
+    scheduler.save_pretrained(save_path)
 
     # Now you train the model
     for i in tqdm(range(int(config.n_train_steps))):
@@ -185,6 +208,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             # global_step += 1
 
         # After each epoch you optionally sample some demo images with evaluate() and save the model
+        if (i+1) % config.checkpointing_freq == 0 :
+            model_checkpoint_name = f"model_{i}.pth"
+            model.save_pretrained(f"{checkpoint_path}/{model_checkpoint_name}")
+            print("saved")
+            # import pdb; pdb.set_trace()
+
         if accelerator.is_main_process:
         #     pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
             if (i + 1) % config.render_freq == 0:
@@ -198,16 +227,15 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                     condition = None
                 render_samples(config, model, renderer, dataset, accelerator,
                                noise_scheduler, savepath, config.eval_batch_size, use_pipeline=config.use_sample_hf_for_render, conditioning=condition)
-
         #     if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1:
         #         if config.push_to_hub:
         #             repo.push_to_hub(commit_message=f"Epoch {epoch}", blocking=True)
         #         else:
-        #             pipeline.save_pretrained(config.output_dir)
+                    # pipeline.save_pretrained(config.output_dir)
 
 
 if __name__ == "__main__":
-    config = TrainingConfig()
+    config = tyro(TrainingConfig)
     # env_id = 
     dataset = SequenceDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer")
     train_dataloader = cycle (torch.utils.data.DataLoader(
