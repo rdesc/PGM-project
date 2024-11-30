@@ -131,6 +131,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         trajectories = batch.trajectories.to(device)
         trajectories = torch.permute(trajectories, (0,2,1) )
         values = batch.values.to(device)
+
+        # print(batch.conditions)
+
         # print(trajectories.shape, values.shape)
         # import pdb; pdb.set_trace()
         # Sample noise to add to the images
@@ -145,6 +148,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         # Add noise to the clean images according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
         noisy_trajectories = noise_scheduler.add_noise(trajectories, noise, timesteps)
+        noisy_trajectories[:,dataset.action_dim:, 0] = batch.conditions[0]
 
         with accelerator.accumulate(model):
             # Predict the noise residual
@@ -222,14 +226,6 @@ if __name__ == "__main__":
 
     scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,beta_schedule="squaredcos_cap_v2")
 
-    # obs = obs[None].repeat(n_samples, axis=0)
-    # conditions = {
-    #     0: to_torch(obs, device=DEVICE)
-    # }
-
-    # constants for inference
-    # batch_size = len(conditions[0])
-    # shape = (batch_size, horizon, state_dim+action_dim)
 
     # create optimizer and lr scheduler
     from diffusers.optimization import get_cosine_schedule_with_warmup
