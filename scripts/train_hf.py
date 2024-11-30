@@ -21,26 +21,31 @@ def cycle(dl):
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-
-def render_samples(config, model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=2, use_pipeline=False):
+def generate_samples(config, conditioning ,model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=2, use_pipeline=False):
+    generator = torch.Generator(device=device)
+    shape = (config.eval_batch_size, config.horizon, dataset.observation_dim + dataset.action_dim,)
+    x = torch.randn(shape, device=device, generator=generator).to(device)
     if use_pipeline:
-        pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
-        x = pipeline(
-                batch_size=config.eval_batch_size,
-                generator=torch.manual_seed(config.seed),
-                 output_type="numpy"
-            ).images
+        for i, t in enumerate(scheduler.timesteps):
+            model_input = scheduler.scale_model_input(x, t)
+            if config.use_conditioning_for_sampling:
+                x[:, 0, dataset.action_dim: ] = conditioning
+            with torch.no_grad():
+                noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
+                noise_pred = noise_pred.permute(0, 2, 1) # needed to match model params to original
+            x = scheduler.step(noise_pred, t, x)
+        if config.use_conditioning_for_sampling:
+            x[:, 0, dataset.action_dim: ] = conditioning
         
     else:
-        generator = torch.Generator(device=device)
         # sample random initial noise vector
-        shape = (config.eval_batch_size, config.horizon, dataset.observation_dim + dataset.action_dim,)
-        x = torch.randn(shape, device=device, generator=generator).to(device)
 
         eta = 1.0 # noise factor for sampling reconstructed state
 
         # run the diffusion process
         # for i in tqdm.tqdm(reversed(range(num_inference_steps)), total=num_inference_steps):
+        if config.use_conditioning_for_sampling:
+            x[:, 0, dataset.action_dim: ] = conditioning
         for i in tqdm(scheduler.timesteps):
 
             # create batch of timesteps to pass into model
@@ -48,7 +53,7 @@ def render_samples(config, model, renderer, dataset, accelerator, noise_schedule
 
             # 1. generate prediction from model
             with torch.no_grad():
-                residual = network(x.permute(0, 2, 1), timesteps).sample
+                residual = model(x.permute(0, 2, 1), timesteps).sample
                 residual = residual.permute(0, 2, 1) # needed to match model params to original
 
             # 2. use the model prediction to reconstruct an observation (de-noise)
@@ -61,11 +66,17 @@ def render_samples(config, model, renderer, dataset, accelerator, noise_schedule
                 # no noise when t == 0
                 # NOTE: original implementation missing sqrt on posterior_variance
                 obs_reconstruct = obs_reconstruct + int(i>0) * (0.5 * posterior_variance) * eta* noise  # MJ had as log var, exponentiated
+            if config.use_conditioning_for_sampling:
+                obs_reconstruct[:, 0, dataset.action_dim: ] = conditioning
 
             # 4. apply conditions to the trajectory
             # obs_reconstruct_postcond = reset_x0(obs_reconstruct, conditions, action_dim)
             x = obs_reconstruct
     x = x[:, : , dataset.action_dim:]
+    return x
+
+def render_samples(config, model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=2, use_pipeline=False, conditioning=None):
+    x = generate_samples(config, conditioning ,model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=n_samples, use_pipeline=use_pipeline)
     # import pdb; pdb.set_trace()
     observations = dataset.normalizer.unnormalize(x.cpu().numpy(), 'observations')
     renderer.composite(savepath, observations)
@@ -96,7 +107,10 @@ class TrainingConfig:
     hub_private_repo = False
     overwrite_output_dir = True  # overwrite the old model when re-running the notebook
     seed = 0
-    use_pipeline_for_render= False
+    use_sample_hf_for_render= False
+    add_training_conditioning = True
+    use_conditioning_for_sampling = True
+    checkpointing_freq = 4200
 
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer):
@@ -145,10 +159,17 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         # Add noise to the clean images according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
         noisy_trajectories = noise_scheduler.add_noise(trajectories, noise, timesteps)
+        # condition on the first state
+        # import pdb; pdb.set_trace()
+        if config.add_training_conditioning:
+            noisy_trajectories[:, dataset.action_dim:, 0 ] = trajectories[:, dataset.action_dim:, 0 ]
 
         with accelerator.accumulate(model):
             # Predict the noise residual
             noise_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
+            # condition on the first state
+            if config.add_training_conditioning:
+                noise_pred[:, dataset.action_dim:, 0] = trajectories[:,  dataset.action_dim:, 0 ]
             loss = F.mse_loss(noise_pred, noise)
             accelerator.backward(loss)
 
@@ -166,13 +187,17 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         # After each epoch you optionally sample some demo images with evaluate() and save the model
         if accelerator.is_main_process:
         #     pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
-
             if (i + 1) % config.render_freq == 0:
                 print("=========== Rendering ==========")
                 savepath=f"rendering/{config.env_id}/render_samples_{i}.png"
                 os.makedirs(f"rendering/{config.env_id}", exist_ok=True)
+                # conditioning = condition if config.use_conditioning_for_sampling else None
+                if config.use_conditioning_for_sampling:
+                    condition = trajectories[:config.eval_batch_size,  dataset.action_dim:, 0]
+                else:
+                    condition = None
                 render_samples(config, model, renderer, dataset, accelerator,
-                               noise_scheduler, savepath, config.eval_batch_size, use_pipeline=config.use_pipeline_for_render)
+                               noise_scheduler, savepath, config.eval_batch_size, use_pipeline=config.use_sample_hf_for_render, conditioning=condition)
 
         #     if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1:
         #         if config.push_to_hub:
