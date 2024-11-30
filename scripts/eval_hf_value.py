@@ -1,6 +1,8 @@
 import d4rl  # noqa
 
 import numpy as np
+import torch
+
 import gym
 import tqdm
 from diffusers.experimental import ValueGuidedRLPipeline
@@ -26,12 +28,13 @@ if __name__ == "__main__":
     env = gym.make(env_name)
     renderer = MuJoCoRenderer(env_name)
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    value_model = DDPMPipeline.from_pretrained("/home/ozgur/git/PGM-project/diffuser-hopperv2-32-trial-03", use_safe_tensors=True, variant=str(190000) )
+    value_model = DDPMPipeline.from_pretrained("/home/ozgur/git/PGM-project/diffuser-hopperv2-32-trial-03", use_safe_tensors=True, variant=str(190000)).to(device)
     pipeline = ValueGuidedRLPipeline.from_pretrained(
         "bglick13/hopper-medium-v2-value-function-hor32",
         env=env,
-    )
+    ).to(device)
     pipeline.value_function = value_model.unet
     pipeline.register_modules(value_functions=pipeline.value_function)
 
@@ -62,6 +65,7 @@ if __name__ == "__main__":
 
             obs = next_observation
         renderer.render_rollout("./render_env.mp4", np.array(rollout))
+        renderer.composite("./render_env.png", np.array(rollout)[None])
 
     except KeyboardInterrupt:
         pass
