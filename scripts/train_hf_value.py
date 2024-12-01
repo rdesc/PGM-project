@@ -84,12 +84,12 @@ class TrainingConfig:
     save_image_epochs = 10
     render_freq = 200e3 +1
     save_model_epochs = 30
-    num_train_timesteps = 100
+    num_train_timesteps = 100  # this is the number of denoising steps
     n_train_steps= 200e3
     n_train_step_per_epoch = 10_000
     mixed_precision = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
     output_dir = "diffuser-hopperv2-32"  # the model name locally and on the HF Hub
-    horizon = 32
+    horizon = 128
     push_to_hub = False  # whether to upload the saved model to the HF Hub
     hub_private_repo = False
     overwrite_output_dir = False  # overwrite the old model when re-running the notebook
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     #     act_fn="mish",
         
     # )
-    net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], "up_block_types": [], "out_block_type": "ValueFunction", "mid_block_type": "ValueFunctionMidBlock1D", "block_out_channels": [32, 64, 128, 256], "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, "out_channels": dataset.observation_dim + dataset.action_dim, "extra_in_channels": 0, "time_embedding_type": "positional", "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, "norm_num_groups": 8, "act_fn": "mish"}
+    net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], "up_block_types": [], "out_block_type": "ValueFunction", "mid_block_type": "ValueFunctionMidBlock1D", "block_out_channels": [32, 64, 128, 256, 512], "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, "out_channels": dataset.observation_dim + dataset.action_dim, "extra_in_channels": 0, "time_embedding_type": "positional", "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, "norm_num_groups": 8, "act_fn": "mish"}
     value_network = UNet1DModel(**net_args).to(device)
     # print(value_network)
     # import pdb; pdb.set_trace()
@@ -241,16 +241,3 @@ if __name__ == "__main__":
     args = (config, value_network, scheduler, optimizer, train_dataloader, lr_scheduler, renderer)
 
     train_loop(*args)
-
-
-
-
-
-
-
-
-
-
-
-    
-

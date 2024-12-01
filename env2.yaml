@@ -1,4 +1,4 @@
-name: diffuser2
+name: diffuser
 channels:
 - defaults
 - conda-forge
@@ -38,4 +38,3 @@ dependencies:
     - jax==0.4.13
     - jaxlib==0.4.13
     - flax==0.7.2
-    - libstdcxx-ng==14.2.0
