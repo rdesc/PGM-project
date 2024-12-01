@@ -1,3 +1,5 @@
+import os 
+
 import d4rl  # noqa
 
 import numpy as np
@@ -8,29 +10,57 @@ import tqdm
 from diffusers.experimental import ValueGuidedRLPipeline
 from diffusers import DDPMPipeline
 from diffuser.utils.rendering import MuJoCoRenderer
+import argparse
 
 
-config = {
-    "n_samples": 64,
-    "horizon": 32,
-    "num_inference_steps": 20,
-    "n_guide_steps": 2,  # can set to 0 for faster sampling, does not use value network
-    "scale_grad_by_std": True,
-    "scale": 0.1,
-    "eta": 0.0,
-    "t_grad_cutoff": 2,
-    "device": "cpu",
-}
+def parse_args():
+    parser = argparse.ArgumentParser("")
+    parser.add_argument("--env_name", type=str,
+                        default="hopper-medium-v2", help="Name of the environment")
+    parser.add_argument("-f", "--file_name_render", type=str,
+                        default=None)
+    parser.add_argument("--pretrained_model", type=str, 
+                        default="/home/rod/PycharmProjects/PGM-project/diffuser-hopperv2-32-trial-03", help="Path to the pretrained model")
+    parser.add_argument("--variant", type=int,
+                        default=190000, help="Variant of the model")
+    parser.add_argument("--n_samples", type=int,
+                        default=64, help="Number of samples")
+    parser.add_argument("--horizon", type=int,
+                        default=32, help="Planning horizon")
+    parser.add_argument("-T", "--num_inference_steps", type=int,
+                        default=1000, help="Number of inference steps")
+    parser.add_argument("--n_guide_steps", type=int,
+                        default=2, help="Number of guide steps")
+    # parser.add_argument("--scale_grad_by_std", type=bool,
+    #                     default=True, help="Scale gradient by standard deviation")
+    parser.add_argument("--scale", type=float,
+                        default=0.0001, help="Scale factor for gradient in classifier guidance")
+    # parser.add_argument("--eta", type=float,
+    #                     default=0.0, help="Eta value")
+    # parser.add_argument("--t_grad_cutoff", type=int,
+    #                     default=2, help="Gradient cutoff")
+    parser.add_argument("--device", type=str,
+                        default="cuda", help="Device to use")
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    env_name = "hopper-medium-v2"
+    config = parse_args()
+
+    env_name = config.env_name
+
+    # check if file exists
+    file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_model) + "_render"
+    if os.path.exists(file_name_render + ".mp4") or os.path.exists(file_name_render + ".png"):
+        print(f"File {file_name_render} already exists. Exiting.")
+        exit()
+
     env = gym.make(env_name)
     renderer = MuJoCoRenderer(env_name)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu" if not (torch.cuda.is_available() and config.device == "cuda") else "cuda"
 
-    value_model = DDPMPipeline.from_pretrained("/home/ozgur/git/PGM-project/diffuser-hopperv2-32-trial-03", use_safe_tensors=True, variant=str(190000)).to(device)
+    value_model = DDPMPipeline.from_pretrained(config.pretrained_model, use_safe_tensors=True, variant=str(config.variant)).to(device)
     pipeline = ValueGuidedRLPipeline.from_pretrained(
         "bglick13/hopper-medium-v2-value-function-hor32",
         env=env,
@@ -42,30 +72,34 @@ if __name__ == "__main__":
     obs = env.reset()
     total_reward = 0
     total_score = 0
-    T = 1000
+    T = config.num_inference_steps
     rollout = [obs.copy()]
+
     try:
         for t in tqdm.tqdm(range(T)):
             # call the policy
-            denorm_actions = pipeline(obs, planning_horizon=32)
+            denorm_actions = pipeline(obs,
+                                      batch_size=config.n_samples,
+                                      planning_horizon=config.horizon,
+                                      n_guide_steps=config.n_guide_steps,
+                                      scale=config.scale)
 
             # execute action in environment
             next_observation, reward, terminal, _ = env.step(denorm_actions)
             score = env.get_normalized_score(total_reward)
             # update return
             total_reward += reward
-            total_score += score
             print(
-                f"Step: {t}, Reward: {reward}, Total Reward: {total_reward}, Score: {score}, Total Score:"
-                f" {total_score}"
+                f"Step: {t}, Reward: {reward}, Total Reward: {total_reward}, Score: {score}"
             )
 
             # save observations for rendering
             rollout.append(next_observation.copy())
 
             obs = next_observation
-        renderer.render_rollout("./render_env.mp4", np.array(rollout))
-        renderer.composite("./render_env.png", np.array(rollout)[None])
+        
+        renderer.render_rollout(f"./{file_name_render}.mp4", np.array(rollout))
+        renderer.composite(f"./{file_name_render}.png", np.array(rollout)[None])
 
     except KeyboardInterrupt:
         pass
