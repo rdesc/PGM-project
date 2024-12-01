@@ -15,6 +15,17 @@ from diffuser.utils.rendering import MuJoCoRenderer
 import time
 import yaml
 import tyro
+import wandb
+
+# from  wonderwords import RandomWord
+
+# def make_random_name():
+#     r = RandomWord()
+#     name = "-".join(
+#         [r.word(word_min_length=3, word_max_length=7, include_parts_of_speech=["adjective"]),
+#             r.word(word_min_length=5, word_max_length=7, include_parts_of_speech=["noun"])])
+#     return name
+
 
 def cycle(dl):
     while True:
@@ -123,9 +134,10 @@ class TrainingConfig:
     add_training_conditioning: bool = True
     use_conditioning_for_sampling: bool = True
     checkpointing_freq: int = 20_000
+    wandb_track: bool = True
 
 
-def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer):
+def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer, save_path):
     # Initialize accelerator and tensorboard logging
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
@@ -148,13 +160,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         model, optimizer, train_dataloader, lr_scheduler
     )
 
-    # global_step = 0
-    run_id = int(time.time())
-    save_path = f"runs/{config.env_id}/{run_id}"
-    os.makedirs(save_path, exist_ok=True)
-    while os.path.exists(save_path):
-        run_id = int(time.time())
-        save_path = f"runs/{config.env_id}/{run_id}"
+    
     checkpoint_path = f"{save_path}/checkpoints"
     os.makedirs(checkpoint_path)
     save_configs(config, save_path)
@@ -203,6 +209,8 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
             # progress_bar.update(1)
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
+            if config.wandb_track:
+                wandb.log(logs, step=i)
             # progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=i)
             # global_step += 1
@@ -235,7 +243,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
 
 if __name__ == "__main__":
-    config = tyro(TrainingConfig)
+    config = tyro.cli(TrainingConfig)
     # env_id = 
     dataset = SequenceDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer")
     train_dataloader = cycle (torch.utils.data.DataLoader(
@@ -294,7 +302,28 @@ if __name__ == "__main__":
         num_training_steps=config.n_train_steps,
     )
     renderer = MuJoCoRenderer(config.env_id)
-    args = (config, network, scheduler, optimizer, train_dataloader, lr_scheduler, renderer)
+
+    # global_step = 0
+    run_id = int(time.time())
+    save_path = f"runs/{config.env_id}/{run_id}"
+    os.makedirs(save_path, exist_ok=True)
+    while os.path.exists(save_path):
+        run_id = int(time.time())
+        save_path = f"runs/{config.env_id}/{run_id}"
+
+
+    args = (config, network, scheduler, optimizer, train_dataloader, lr_scheduler, renderer, save_path)
+    
+    # name = f'{make_random_name()}-{str(run_id)}'
+    name = str(run_id)
+    
+    if config.wandb_track:
+        wandb.init(
+            config=config,
+            name=name,
+            project="diffusion_training",
+            entity="pgm-diffusion"
+        )
 
     train_loop(*args)
 
