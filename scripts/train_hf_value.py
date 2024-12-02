@@ -4,6 +4,7 @@ from tqdm.auto import tqdm
 from pathlib import Path
 
 import os
+import time
 
 import torch
 import torch.nn.functional as F
@@ -18,6 +19,9 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.datasets import ValueDataset
 
+import tyro
+import wandb
+
 def cycle(dl):
     while True:
         for data in dl:
@@ -28,23 +32,24 @@ print("device", device)
 
 @dataclass
 class TrainingConfig:
-    env_id = "hopper-medium-v2"
-    train_batch_size = 64
-    gradient_accumulation_steps = 1
-    learning_rate = 2e-4
-    lr_warmup_steps = 500
-    num_train_timesteps = 100
-    n_train_steps= 200e3
-    mixed_precision = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
-    output_dir = "diffuser-value-hopperv2-32"  # the model name locally and on the HF Hub
-    horizon = 128
-    seed = 0
-    use_ema = True
-    ema_decay = 0.995
-    update_ema_steps = 10
-    save_model_steps = 1e4
+    env_id: str = "hopper-medium-v2"
+    train_batch_size: int = 64
+    gradient_accumulation_steps: int = 1
+    learning_rate: float = 2e-4
+    lr_warmup_steps: int = 500
+    num_train_timesteps: int = 100
+    n_train_steps: int = 200e3
+    mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
+    # output_dir: str = "diffuser-value-hopperv2-32"  # the model name locally and on the HF Hub
+    horizon: int = 128
+    seed: int = 0
+    use_ema: bool = True
+    ema_decay: float = 0.995
+    update_ema_steps: int = 10
+    save_model_steps: int = 1e4
     num_workers: int = 1
     torch_compile: bool = True
+    wandb_track: bool = True
 
 
 
@@ -113,14 +118,19 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
+
             if config.use_ema and i % config.update_ema_steps == 0:
                 ema.step(model.parameters())
 
 
+            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
+            if config.wandb_track:
+                wandb.log(logs, step=i)
+
         # After each epoch you optionally sample some demo images with evaluate() and save the model
         if accelerator.is_main_process:
             if (i + 1) % config.save_model_steps == 0:
-                print("Saving model....", "output_dir", config.output_dir, i+1, "loss", loss.detach().item()) 
+                # print("Saving model....", "output_dir", config.output_dir, i+1, "loss", loss.detach().item()) 
                 accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "unet"), variant=str(i+1))
                 if config.use_ema:
                     ema.store(model.parameters())
@@ -131,7 +141,19 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
 
 if __name__ == "__main__":
-    config = TrainingConfig()
+    config = tyro.cli(TrainingConfig)
+
+    run_id = int(time.time())
+    if config.wandb_track:
+        wandb.init(
+            config=config,
+            name="value_{}".format(run_id),
+            project="diffusion_training",
+            entity="pgm-diffusion"
+        )
+    
+    config.output_dir = "{}-h{}-ntt{}".format(config.env_id, config.horizon, config.num_train_timesteps) 
+        
     dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
@@ -142,7 +164,9 @@ if __name__ == "__main__":
                "out_channels": dataset.observation_dim + dataset.action_dim, "extra_in_channels": 0, "time_embedding_type": "positional", 
                "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, "norm_num_groups": 8, "act_fn": "mish"}
     
-    
+    if config.wandb_track:
+        wandb.config["network_parameters"] = net_args
+
     value_network = UNet1DModel(**net_args)
     if config.torch_compile:
         value_network = torch.compile(value_network)
