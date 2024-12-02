@@ -135,6 +135,8 @@ class TrainingConfig:
     use_conditioning_for_sampling: bool = True
     checkpointing_freq: int = 20_000
     wandb_track: bool = True
+    num_workers: int = 1
+    torch_compile: bool = True
 
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer, save_path):
@@ -247,7 +249,7 @@ if __name__ == "__main__":
     # env_id = 
     dataset = SequenceDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer")
     train_dataloader = cycle (torch.utils.data.DataLoader(
-        dataset, batch_size=config.train_batch_size, num_workers=1, shuffle=True, pin_memory=True
+        dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True
         ))
     n_epochs = config.n_train_steps // config.n_train_step_per_epoch
     config.n_epochs = n_epochs
@@ -272,6 +274,8 @@ if __name__ == "__main__":
     # )
     net_args = {'sample_size': 65536, 'sample_rate': None, 'in_channels': dataset.observation_dim + dataset.action_dim, 'out_channels': dataset.observation_dim + dataset.action_dim, 'extra_in_channels': 0, 'time_embedding_type': 'positional', 'flip_sin_to_cos': False, 'use_timestep_embedding': True, 'freq_shift': 1, 'down_block_types': ['DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D'], 'up_block_types': ['UpResnetBlock1D', 'UpResnetBlock1D', 'UpResnetBlock1D'], 'mid_block_type': 'MidResTemporalBlock1D', 'out_block_type': 'OutConv1DBlock', 'block_out_channels': [32, 64, 128, 256], 'act_fn': 'mish', 'norm_num_groups': 8, 'layers_per_block': 1, 'downsample_each_block': False, '_use_default_values': ['sample_rate']}
     network = UNet1DModel(**net_args).to(device)
+    if train_config.torch_compile:
+        network = torch.compile(network)
     # import pdb; pdb.set_trace()
     # trajetory = next(train_dataloader).trajectories[0].unsqueeze(0).to(device)
     # sample random initial noise vector
