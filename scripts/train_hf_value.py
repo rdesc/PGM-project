@@ -44,6 +44,7 @@ class TrainingConfig:
     update_ema_steps = 10
     save_model_steps = 1e4
     num_workers: int = 1
+    torch_compile: bool = True
 
 
 
@@ -143,6 +144,8 @@ if __name__ == "__main__":
     
     
     value_network = UNet1DModel(**net_args)
+    if config.torch_compile:
+        value_network = torch.compile(value_network)
 
     # create the schulduler 
 
