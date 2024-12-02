@@ -101,7 +101,6 @@ if __name__ == "__main__":
         
     pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=unet, scheduler=scheduler, env=env).to(device)
 
-    exit(0)
     obs = env.reset()
     total_reward = 0
     total_score = 0
