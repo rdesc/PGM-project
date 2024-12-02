@@ -274,7 +274,7 @@ if __name__ == "__main__":
     # )
     net_args = {'sample_size': 65536, 'sample_rate': None, 'in_channels': dataset.observation_dim + dataset.action_dim, 'out_channels': dataset.observation_dim + dataset.action_dim, 'extra_in_channels': 0, 'time_embedding_type': 'positional', 'flip_sin_to_cos': False, 'use_timestep_embedding': True, 'freq_shift': 1, 'down_block_types': ['DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D'], 'up_block_types': ['UpResnetBlock1D', 'UpResnetBlock1D', 'UpResnetBlock1D'], 'mid_block_type': 'MidResTemporalBlock1D', 'out_block_type': 'OutConv1DBlock', 'block_out_channels': [32, 64, 128, 256], 'act_fn': 'mish', 'norm_num_groups': 8, 'layers_per_block': 1, 'downsample_each_block': False, '_use_default_values': ['sample_rate']}
     network = UNet1DModel(**net_args).to(device)
-    if train_config.torch_compile:
+    if config.torch_compile:
         network = torch.compile(network)
     # import pdb; pdb.set_trace()
     # trajetory = next(train_dataloader).trajectories[0].unsqueeze(0).to(device)
