@@ -1,6 +1,6 @@
 import os 
 
-import d4rl  # noqa
+# import d4rl  # noqa
 
 import numpy as np
 import torch
@@ -8,7 +8,7 @@ import torch
 import gym
 import tqdm
 from diffusers.experimental import ValueGuidedRLPipeline
-from diffusers import  UNet1DModel
+from diffusers import  UNet1DModel, DDPMScheduler, DDPMPipeline
 from diffuser.utils.rendering import MuJoCoRenderer
 import argparse
 
@@ -19,10 +19,6 @@ def parse_args():
                         default="hopper-medium-v2", help="Name of the environment")
     parser.add_argument("-f", "--file_name_render", type=str,
                         default=None)
-    parser.add_argument("--pretrained_model", type=str, 
-                        default="./diffuser-value-hopperv2-32", help="Path to the pretrained model")
-    parser.add_argument("--variant", type=int,
-                        default=200000, help="Variant of the model")
     parser.add_argument("--n_samples", type=int,
                         default=64, help="Number of samples")
     parser.add_argument("--horizon", type=int,
@@ -43,16 +39,33 @@ def parse_args():
                         default="cuda", help="Device to use")
     parser.add_argument("--render_steps", type=int,
                         default=50, help="Number of steps for saving a render")
+    parser.add_argument("--pretrained_value_model", type=str, 
+                        default=None, help="Path to the pretrained value model")
+    parser.add_argument("--pretrained_diff_model", type=str,
+                        default=None, help="Path to the pretrained diffusion model")
+    parser.add_argument("--checkpoint_diff_model", type=int, 
+                        default=None)
+    parser.add_argument("--checkpoint_value_model", type=int, 
+                        default=None)
+    parser.add_argument("--runid_diff_model", type=int, 
+                        default=None)
+    parser.add_argument("--use_ema", action='store_true',
+                        default=False, help="Path to the pretrained diffusion model")
+    parser.add_argument("--hf_repo", type=str, default="bglick13/hopper-medium-v2-value-function-hor32")
+    parser.add_argument("--torch_compile", action="store_true", default=False)
+    parser.add_argument("--grad_scale", type=int, default=0.1)
+
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     config = parse_args()
 
+    print("config grad_scale", config.grad_scale)
     env_name = config.env_name
 
     # check if file exists
-    file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_model) + "_render"
+    file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_value_model) + "_render"
     if os.path.exists(file_name_render + ".mp4") or os.path.exists(file_name_render + ".png"):
         print(f"File {file_name_render} already exists. Exiting.")
         exit()
@@ -62,16 +75,33 @@ if __name__ == "__main__":
 
     device = "cpu" if not (torch.cuda.is_available() and config.device == "cuda") else "cuda"
 
-    value_unet = UNet1DModel.from_pretrained(config.pretrained_model, use_safe_tensors=True, subfolder="unet", variant=str(config.variant)).to(device)
+    if not config.pretrained_value_model is None:
+        print("Loading value model from ", config.pretrained_value_model)
+        value_function = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True, 
+                                                 subfolder="ema" if config.use_ema else "unet", variant=str(config.checkpoint_value_model)).to(device)
 
-    pipeline = ValueGuidedRLPipeline.from_pretrained(
-        "bglick13/hopper-medium-v2-value-function-hor32",
-        env=env,
-    ).to(device)
-    pipeline.value_function = value_unet
-    pipeline.register_modules(value_functions=pipeline.value_function)
+    else:
+        print("Loading value function from ", config.hf_repo)
+        value_function = UNet1DModel.from_pretrained(config.hf_repo, subfolder="value_function")
 
-    env.seed(0)
+    if not config.pretrained_diff_model is None:
+        print("Loading diffusion model from ", config.pretrained_diff_model)
+
+        pretrained_diff_path = os.path.join(config.pretrained_diff_model, str(config.runid_diff_model))
+        unet = UNet1DModel.from_pretrained(os.path.join(pretrained_diff_path, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model)), use_safe_tensors=True)
+        scheduler = DDPMScheduler.from_pretrained(pretrained_diff_path)
+        
+    else:
+        print("Loading diffusion model from ", config.hf_repo)
+        unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet")
+        scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler")
+    
+    if config.torch_compile:
+        value_function = torch.compile(value_function)
+        unet = torch.compile(unet)
+        
+    pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=unet, scheduler=scheduler, env=env).to(device)
+
     obs = env.reset()
     total_reward = 0
     total_score = 0
@@ -85,7 +115,7 @@ if __name__ == "__main__":
                                       batch_size=config.n_samples,
                                       planning_horizon=config.horizon,
                                       n_guide_steps=config.n_guide_steps,
-                                      scale=config.scale)
+                                      scale=config.grad_scale)
 
             # execute action in environment
             next_observation, reward, terminal, _ = env.step(denorm_actions)
@@ -101,9 +131,9 @@ if __name__ == "__main__":
 
             obs = next_observation
         
-            if t % config.render_steps == 0: 
-                renderer.render_rollout(f"./{file_name_render}_{t}.mp4", np.array(rollout))
-                renderer.composite(f"./{file_name_render}_{t}.png", np.array(rollout)[None])
+            if (t+1) % config.render_steps == 0: 
+                renderer.render_rollout(f"./{file_name_render}.mp4", np.array(rollout))
+                renderer.composite(f"./{file_name_render}.png", np.array(rollout)[None])
 
     except KeyboardInterrupt:
         pass
