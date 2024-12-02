@@ -68,14 +68,16 @@ def load_json(path):
 class EvalConfig:
     env_id: str = "hopper-medium-expert-v2"
     eval_batch_size: int = 1  # how many images to sample during evaluation
-    num_train_timesteps: int = None
-    horizon: int = None
+    num_train_timesteps: int = 100
+    horizon: int = 128
     seed: int = 0
     use_sample_hf_for_eval: bool= False
     use_conditioning_for_sampling: bool = True
     render: bool = True
-    run_id: int = None
-    checkpoint_id: int = None
+    render_steps: int = 50
+    render_file_name: str = "faisal-eval-unguided"
+    run_id: int = "1733012971"
+    checkpoint_id: int = 199999
     max_episode_length: int = 1000
     n_episodes: int = 1
     
@@ -83,6 +85,12 @@ class EvalConfig:
 if __name__ == "__main__":
 
     eval_config = tyro.cli(EvalConfig)
+
+    render_file_name = eval_config.render_file_name if eval_config.render_file_name else eval_config.run_id + "_render"
+    if os.path.exists(render_file_name + ".mp4") or os.path.exists(render_file_name + ".png"):
+        print(f"File {render_file_name} already exists. Exiting.")
+        exit()
+
     config_path, checkpoint_path = create_training_paths(eval_config.env_id, eval_config.run_id, checkpoint_id=eval_config.checkpoint_id)
     
     training_config = load_training_config(config_path=config_path)
@@ -104,6 +112,8 @@ if __name__ == "__main__":
     noise_scheduler = scheduler_class.from_pretrained(f'{checkpoint_path}/../../')
 
     env = dataset.env
+
+    renderer = MuJoCoRenderer(eval_config.env_id)
     
     total_rewards = []
     total_scores = []
@@ -148,7 +158,14 @@ if __name__ == "__main__":
             ## render every `args.vis_freq` steps
             # logger.log(t, samples, state, rollout)
 
+            if t % eval_config.render_steps == 0: 
+                renderer.render_rollout(f"./{render_file_name}_{t}.mp4", np.array(rollout))
+                renderer.composite(f"./{render_file_name}_{t}.png", np.array(rollout)[None])
+
             if terminal:
+                print('Hit terminal state!')
+                renderer.render_rollout(f"./{render_file_name}_{t}.mp4", np.array(rollout))
+                renderer.composite(f"./{render_file_name}_{t}.png", np.array(rollout)[None])
                 break
 
             observation = next_observation
