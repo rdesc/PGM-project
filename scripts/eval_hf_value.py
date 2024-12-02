@@ -8,7 +8,7 @@ import torch
 import gym
 import tqdm
 from diffusers.experimental import ValueGuidedRLPipeline
-from diffusers import DDPMPipeline
+from diffusers import  UNet1DModel
 from diffuser.utils.rendering import MuJoCoRenderer
 import argparse
 
@@ -20,9 +20,9 @@ def parse_args():
     parser.add_argument("-f", "--file_name_render", type=str,
                         default=None)
     parser.add_argument("--pretrained_model", type=str, 
-                        default="/home/rod/PycharmProjects/PGM-project/diffuser-hopperv2-32-trial-03", help="Path to the pretrained model")
+                        default="./diffuser-value-hopperv2-32", help="Path to the pretrained model")
     parser.add_argument("--variant", type=int,
-                        default=190000, help="Variant of the model")
+                        default=200000, help="Variant of the model")
     parser.add_argument("--n_samples", type=int,
                         default=64, help="Number of samples")
     parser.add_argument("--horizon", type=int,
@@ -34,13 +34,15 @@ def parse_args():
     # parser.add_argument("--scale_grad_by_std", type=bool,
     #                     default=True, help="Scale gradient by standard deviation")
     parser.add_argument("--scale", type=float,
-                        default=0.0001, help="Scale factor for gradient in classifier guidance")
+                        default=0.1, help="Scale factor for gradient in classifier guidance")
     # parser.add_argument("--eta", type=float,
     #                     default=0.0, help="Eta value")
     # parser.add_argument("--t_grad_cutoff", type=int,
     #                     default=2, help="Gradient cutoff")
     parser.add_argument("--device", type=str,
                         default="cuda", help="Device to use")
+    parser.add_argument("--render_steps", type=int,
+                        default=50, help="Number of steps for saving a render")
     return parser.parse_args()
 
 
@@ -60,12 +62,13 @@ if __name__ == "__main__":
 
     device = "cpu" if not (torch.cuda.is_available() and config.device == "cuda") else "cuda"
 
-    value_model = DDPMPipeline.from_pretrained(config.pretrained_model, use_safe_tensors=True, variant=str(config.variant)).to(device)
+    value_unet = UNet1DModel.from_pretrained(config.pretrained_model, use_safe_tensors=True, subfolder="unet", variant=str(config.variant)).to(device)
+
     pipeline = ValueGuidedRLPipeline.from_pretrained(
         "bglick13/hopper-medium-v2-value-function-hor32",
         env=env,
     ).to(device)
-    pipeline.value_function = value_model.unet
+    pipeline.value_function = value_unet
     pipeline.register_modules(value_functions=pipeline.value_function)
 
     env.seed(0)
@@ -98,8 +101,9 @@ if __name__ == "__main__":
 
             obs = next_observation
         
-        renderer.render_rollout(f"./{file_name_render}.mp4", np.array(rollout))
-        renderer.composite(f"./{file_name_render}.png", np.array(rollout)[None])
+            if t % config.render_steps == 0: 
+                renderer.render_rollout(f"./{file_name_render}_{t}.mp4", np.array(rollout))
+                renderer.composite(f"./{file_name_render}_{t}.png", np.array(rollout)[None])
 
     except KeyboardInterrupt:
         pass
