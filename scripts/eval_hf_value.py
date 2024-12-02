@@ -53,6 +53,7 @@ def parse_args():
                         default=False, help="Path to the pretrained diffusion model")
     parser.add_argument("--hf_repo", type=str, default="bglick13/hopper-medium-v2-value-function-hor32")
     parser.add_argument("--torch_compile", action="store_true", default=False)
+    parser.add_argument("--grad_scale", type=int, default=0.1)
 
     return parser.parse_args()
 
@@ -60,6 +61,7 @@ def parse_args():
 if __name__ == "__main__":
     config = parse_args()
 
+    print("config grad_scale", config.grad_scale)
     env_name = config.env_name
 
     # check if file exists
@@ -94,7 +96,6 @@ if __name__ == "__main__":
         unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet")
         scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler")
     
-
     if config.torch_compile:
         value_function = torch.compile(value_function)
         unet = torch.compile(unet)
@@ -114,7 +115,7 @@ if __name__ == "__main__":
                                       batch_size=config.n_samples,
                                       planning_horizon=config.horizon,
                                       n_guide_steps=config.n_guide_steps,
-                                      scale=0)
+                                      scale=config.grad_scale)
 
             # execute action in environment
             next_observation, reward, terminal, _ = env.step(denorm_actions)
