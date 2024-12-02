@@ -52,6 +52,7 @@ def parse_args():
     parser.add_argument("--use_ema", action='store_true',
                         default=False, help="Path to the pretrained diffusion model")
     parser.add_argument("--hf_repo", type=str, default="bglick13/hopper-medium-v2-value-function-hor32")
+    parser.add_argument("--torch_compile", action="store_true", default=False)
 
     return parser.parse_args()
 
@@ -74,12 +75,12 @@ if __name__ == "__main__":
 
     if not config.pretrained_value_model is None:
         print("Loading value model from ", config.pretrained_value_model)
-        value_unet = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True, 
+        value_function = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True, 
                                                  subfolder="ema" if config.use_ema else "unet", variant=str(config.checkpoint_value_model)).to(device)
 
     else:
         print("Loading value function from ", config.hf_repo)
-        value_unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="value_function")
+        value_function = UNet1DModel.from_pretrained(config.hf_repo, subfolder="value_function")
 
     if not config.pretrained_diff_model is None:
         print("Loading diffusion model from ", config.pretrained_diff_model)
@@ -93,7 +94,12 @@ if __name__ == "__main__":
         unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet")
         scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler")
     
-    pipeline = ValueGuidedRLPipeline(value_function=value_unet, unet=unet, scheduler=scheduler, env=env).to(device)
+
+    if config.torch_compile:
+        value_function = torch.compile(value_function)
+        unet = torch.compile(unet)
+        
+    pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=unet, scheduler=scheduler, env=env).to(device)
 
     exit(0)
     obs = env.reset()
