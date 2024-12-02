@@ -137,6 +137,7 @@ class TrainingConfig:
     wandb_track: bool = True
     num_workers: int = 1
     torch_compile: bool = True
+    model_type: str 'diffusion'
 
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer, save_path):
