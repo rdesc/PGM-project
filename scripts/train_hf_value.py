@@ -43,6 +43,7 @@ class TrainingConfig:
     ema_decay = 0.995
     update_ema_steps = 10
     save_model_steps = 1e4
+    num_workers: int = 1
 
 
 
@@ -131,7 +132,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 if __name__ == "__main__":
     config = TrainingConfig()
     dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100)
-    train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=1, shuffle=True, pin_memory=True)
+    train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
     net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 
                "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], 
