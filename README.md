@@ -13,6 +13,13 @@ scripts/eval_hf_value.py
 scripts/eval_unguided_hf.py
 scripts/bc_d4rl.py
 ```
+
+
+### This is the state of our project currently:
+![flop](https://github.com/user-attachments/assets/2bfaa11b-1a30-4935-af07-0b11bd46111f)
+
+
+
 # Planning with Diffusion &nbsp;&nbsp; [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1YajKhu-CUIGBJeQPehjVPJcK_b38a8Nc?usp=sharing)
 
 
