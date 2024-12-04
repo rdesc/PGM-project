@@ -27,8 +27,6 @@ def cycle(dl):
         for data in dl:
             yield data
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print("device", device)
 
 @dataclass
 class TrainingConfig:
@@ -41,15 +39,18 @@ class TrainingConfig:
     n_train_steps: int = 200e3
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
     # output_dir: str = "diffuser-value-hopperv2-32"  # the model name locally and on the HF Hub
-    horizon: int = 128
+    horizon: int = 32
     seed: int = 0
     use_ema: bool = True
     ema_decay: float = 0.995
     update_ema_steps: int = 10
+    update_ema_start: int = 2000
     save_model_steps: int = 1e4
     num_workers: int = 1
     torch_compile: bool = True
     wandb_track: bool = True
+    model_type: str = "value"
+    model_config_path: str = "bglick13/hopper-medium-v2-value-function-hor32"
 
 
 
@@ -120,7 +121,13 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             optimizer.zero_grad()
 
             if config.use_ema and i % config.update_ema_steps == 0:
-                ema.step(model.parameters())
+                if i < config.update_ema_start: ## This is used in Diffuser repo
+                    ## taken from the EMAModel file in HF 
+                    parameters = model.parameters()
+                    parameters = list(parameters)
+                    ema.shadow_params = [p.clone().detach() for p in parameters]
+                else:
+                    ema.step(model.parameters())
 
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
@@ -132,11 +139,11 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             if (i + 1) % config.save_model_steps == 0:
                 # print("Saving model....", "output_dir", config.output_dir, i+1, "loss", loss.detach().item()) 
                 accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "unet"), variant=str(i+1))
-                if config.use_ema:
-                    ema.store(model.parameters())
-                    ema.copy_to(model.parameters())
-                    accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "ema"), variant=str(i+1))
-                    ema.restore(model.parameters())
+    if config.use_ema:
+        ema.store(model.parameters())
+        ema.copy_to(model.parameters())
+        accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "ema"))
+        ema.restore(model.parameters())
 
 
 
@@ -147,7 +154,7 @@ if __name__ == "__main__":
     if config.wandb_track:
         wandb.init(
             config=config,
-            name="value_{}".format(run_id),
+            name="{}_{}".format(config.model_type, run_id),
             project="diffusion_training",
             entity="pgm-diffusion"
         )
@@ -157,25 +164,38 @@ if __name__ == "__main__":
     dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
-    net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 
-               "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], 
-               "up_block_types": [], "out_block_type": "ValueFunction", "mid_block_type": "ValueFunctionMidBlock1D", 
-               "block_out_channels": [32, 64, 128, 256, 512], "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, 
-               "out_channels": dataset.observation_dim + dataset.action_dim, "extra_in_channels": 0, "time_embedding_type": "positional", 
-               "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, "norm_num_groups": 8, "act_fn": "mish"}
+    # net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 
+    #            "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], 
+    #            "up_block_types": [], "out_block_type": "ValueFunction", "mid_block_type": "ValueFunctionMidBlock1D", 
+    #            "block_out_channels": [32, 64, 128, 256, 512], "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, 
+    #            "out_channels": dataset.observation_dim + dataset.action_dim, "extra_in_channels": 0, "time_embedding_type": "positional", 
+    #            "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, "norm_num_groups": 8, "act_fn": "mish"}
     
-    if config.wandb_track:
-        wandb.config["network_parameters"] = net_args
+    # if config.wandb_track:
+    #     wandb.config["network_parameters"] = net_args
 
-    value_network = UNet1DModel(**net_args)
+    # value_network = UNet1DModel(**net_args)
+    value_network_config = UNet1DModel.load_config(config.model_config_path, subfolder="value_function")
+    print(value_network_config)
+    value_network = UNet1DModel.from_config(value_network_config)
+
+
     if config.torch_compile:
         value_network = torch.compile(value_network)
 
     # create the schulduler 
 
-    scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,beta_schedule="squaredcos_cap_v2")
+    # scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,beta_schedule="squaredcos_cap_v2")
+    scheduler_config = DDPMScheduler.load_config(config.model_config_path, subfolder="scheduler")
+    print(scheduler_config)
+    scheduler = DDPMScheduler.from_config(scheduler_config)
 
-    optimizer = torch.optim.AdamW(value_network.parameters(), lr=config.learning_rate)
+
+    if config.wandb_track:
+        wandb.config["model_config"] = value_network_config
+        wandb.config["scheduler_config"] = scheduler_config
+
+    optimizer = torch.optim.Adam(value_network.parameters(), lr=config.learning_rate)
 
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer=optimizer,

@@ -1,4 +1,5 @@
 import os 
+from dataclasses import dataclass, asdict
 
 # import d4rl  # noqa
 
@@ -10,58 +11,35 @@ import tqdm
 from diffusers.experimental import ValueGuidedRLPipeline
 from diffusers import  UNet1DModel, DDPMScheduler, DDPMPipeline
 from diffuser.utils.rendering import MuJoCoRenderer
-import argparse
+from bc_d4rl import show_sample
+import tyro
 
+@dataclass
+class TrainingConfig:
+    env_name: str = "hopper-medium-v2"
+    file_name_render: str = None
+    batch_size: int = 64
+    planning_horizon: int = 32
+    max_episode_length: int = 1000
+    n_guide_steps: int = 2
+    scale: float = 0.1
+    num_train_timesteps: int = 100
+    render_steps: int = 50
+    pretrained_value_model: str = None
+    pretrained_diff_model: str = None
+    checkpoint_diff_model: int = None
+    checkpoint_value_model: int = None
+    runid_diff_model: int = None
+    hf_repo: str = "bglick13/hopper-medium-v2-value-function-hor32"
+    use_ema: bool = True
+    torch_compile: bool = True
 
-def parse_args():
-    parser = argparse.ArgumentParser("")
-    parser.add_argument("--env_name", type=str,
-                        default="hopper-medium-v2", help="Name of the environment")
-    parser.add_argument("-f", "--file_name_render", type=str,
-                        default=None)
-    parser.add_argument("--n_samples", type=int,
-                        default=64, help="Number of samples")
-    parser.add_argument("--horizon", type=int,
-                        default=32, help="Planning horizon")
-    parser.add_argument("-T", "--num_inference_steps", type=int,
-                        default=1000, help="Number of inference steps")
-    parser.add_argument("--n_guide_steps", type=int,
-                        default=2, help="Number of guide steps")
-    # parser.add_argument("--scale_grad_by_std", type=bool,
-    #                     default=True, help="Scale gradient by standard deviation")
-    parser.add_argument("--scale", type=float,
-                        default=0.1, help="Scale factor for gradient in classifier guidance")
-    # parser.add_argument("--eta", type=float,
-    #                     default=0.0, help="Eta value")
-    # parser.add_argument("--t_grad_cutoff", type=int,
-    #                     default=2, help="Gradient cutoff")
-    parser.add_argument("--device", type=str,
-                        default="cuda", help="Device to use")
-    parser.add_argument("--render_steps", type=int,
-                        default=50, help="Number of steps for saving a render")
-    parser.add_argument("--pretrained_value_model", type=str, 
-                        default=None, help="Path to the pretrained value model")
-    parser.add_argument("--pretrained_diff_model", type=str,
-                        default=None, help="Path to the pretrained diffusion model")
-    parser.add_argument("--checkpoint_diff_model", type=int, 
-                        default=None)
-    parser.add_argument("--checkpoint_value_model", type=int, 
-                        default=None)
-    parser.add_argument("--runid_diff_model", type=int, 
-                        default=None)
-    parser.add_argument("--use_ema", action='store_true',
-                        default=False, help="Path to the pretrained diffusion model")
-    parser.add_argument("--hf_repo", type=str, default="bglick13/hopper-medium-v2-value-function-hor32")
-    parser.add_argument("--torch_compile", action="store_true", default=False)
-    parser.add_argument("--grad_scale", type=int, default=0.1)
-
-    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    config = parse_args()
+    config = tyro.cli(TrainingConfig)
 
-    print("config grad_scale", config.grad_scale)
+    print("config grad_scale", config.scale)
     env_name = config.env_name
 
     # check if file exists
@@ -73,27 +51,28 @@ if __name__ == "__main__":
     env = gym.make(env_name)
     renderer = MuJoCoRenderer(env_name)
 
-    device = "cpu" if not (torch.cuda.is_available() and config.device == "cuda") else "cuda"
+    device = "cpu" if not torch.cuda.is_available() else "cuda"
 
     if not config.pretrained_value_model is None:
-        print("Loading value model from ", config.pretrained_value_model)
+        print("Loading value model from ", config.pretrained_value_model, config.checkpoint_value_model, "use-ema:", config.use_ema)
         value_function = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True, 
                                                  subfolder="ema" if config.use_ema else "unet", variant=str(config.checkpoint_value_model)).to(device)
 
     else:
         print("Loading value function from ", config.hf_repo)
-        value_function = UNet1DModel.from_pretrained(config.hf_repo, subfolder="value_function")
+        value_function = UNet1DModel.from_pretrained(config.hf_repo, subfolder="value_function", use_safe_tensors=False)
 
     if not config.pretrained_diff_model is None:
-        print("Loading diffusion model from ", config.pretrained_diff_model)
+        print("Loading diffusion model from ", config.pretrained_diff_model, config.checkpoint_diff_model)
 
         pretrained_diff_path = os.path.join(config.pretrained_diff_model, str(config.runid_diff_model))
-        unet = UNet1DModel.from_pretrained(os.path.join(pretrained_diff_path, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model)), use_safe_tensors=True)
+        unet = UNet1DModel.from_pretrained(os.path.join(pretrained_diff_path, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model)))
         scheduler = DDPMScheduler.from_pretrained(pretrained_diff_path)
+        print("num train timesteps", scheduler.num_train_timesteps)
         
     else:
         print("Loading diffusion model from ", config.hf_repo)
-        unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet")
+        unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet", use_safe_tensors=False)
         scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler")
     
     if config.torch_compile:
@@ -105,17 +84,16 @@ if __name__ == "__main__":
     obs = env.reset()
     total_reward = 0
     total_score = 0
-    T = config.num_inference_steps
     rollout = [obs.copy()]
 
     try:
-        for t in tqdm.tqdm(range(T)):
+        for t in tqdm.tqdm(range(config.max_episode_length)):
             # call the policy
             denorm_actions = pipeline(obs,
-                                      batch_size=config.n_samples,
-                                      planning_horizon=config.horizon,
+                                      batch_size=config.batch_size,
+                                      planning_horizon=config.planning_horizon,
                                       n_guide_steps=config.n_guide_steps,
-                                      scale=config.grad_scale)
+                                      scale=config.scale)
 
             # execute action in environment
             next_observation, reward, terminal, _ = env.step(denorm_actions)
@@ -132,8 +110,8 @@ if __name__ == "__main__":
             obs = next_observation
         
             if (t+1) % config.render_steps == 0: 
-                renderer.render_rollout(f"./{file_name_render}.mp4", np.array(rollout))
-                renderer.composite(f"./{file_name_render}.png", np.array(rollout)[None])
+                show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
+                renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
 
     except KeyboardInterrupt:
         pass
