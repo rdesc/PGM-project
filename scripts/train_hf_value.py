@@ -149,17 +149,17 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
-
     run_id = int(time.time())
+    config.output_dir = f"{config.model_type}_{run_id}"
+
     if config.wandb_track:
         wandb.init(
             config=config,
-            name="{}_{}".format(config.model_type, run_id),
+            name=config.output_dir,
             project="diffusion_training",
             entity="pgm-diffusion"
         )
     
-    config.output_dir = "{}-h{}-ntt{}".format(config.env_id, config.horizon, config.num_train_timesteps) 
         
     dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
