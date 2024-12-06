@@ -1,5 +1,6 @@
 import os 
 from dataclasses import dataclass, asdict
+from typing import Optional
 
 # import d4rl  # noqa
 
@@ -17,7 +18,8 @@ import tyro
 @dataclass
 class TrainingConfig:
     env_name: str = "hopper-medium-v2"
-    file_name_render: str = None
+    """Name of the environment"""
+    file_name_render: Optional[str] = None
     batch_size: int = 64
     planning_horizon: int = 32
     max_episode_length: int = 1000
@@ -25,11 +27,11 @@ class TrainingConfig:
     scale: float = 0.1
     num_train_timesteps: int = 100
     render_steps: int = 50
-    pretrained_value_model: str = None
-    pretrained_diff_model: str = None
-    checkpoint_diff_model: int = None
-    checkpoint_value_model: int = None
-    runid_diff_model: int = None
+    pretrained_value_model: Optional[str] = None
+    pretrained_diff_model: Optional[str] = None
+    checkpoint_value_model: Optional[str] = None
+    checkpoint_diff_model: Optional[str] = None
+    runid_diff_model: Optional[str] = None
     hf_repo: str = "bglick13/hopper-medium-v2-value-function-hor32"
     use_ema: bool = True
     torch_compile: bool = True
@@ -56,16 +58,16 @@ if __name__ == "__main__":
     if not config.pretrained_value_model is None:
         print("Loading value model from ", config.pretrained_value_model, config.checkpoint_value_model, "use-ema:", config.use_ema)
         value_function = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True, 
-                                                 subfolder="ema" if config.use_ema else "unet", variant=str(config.checkpoint_value_model)).to(device)
+                                                 subfolder="ema" if config.use_ema else "unet", variant= None if config.use_ema else str(config.checkpoint_value_model)).to(device)
 
     else:
         print("Loading value function from ", config.hf_repo)
         value_function = UNet1DModel.from_pretrained(config.hf_repo, subfolder="value_function", use_safe_tensors=False)
 
     if not config.pretrained_diff_model is None:
-        print("Loading diffusion model from ", config.pretrained_diff_model, config.checkpoint_diff_model)
-
         pretrained_diff_path = os.path.join(config.pretrained_diff_model, str(config.runid_diff_model))
+        print("Loading diffusion model from ", pretrained_diff_path, config.checkpoint_diff_model)
+
         unet = UNet1DModel.from_pretrained(os.path.join(pretrained_diff_path, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model)))
         scheduler = DDPMScheduler.from_pretrained(pretrained_diff_path)
         print("num train timesteps", scheduler.num_train_timesteps)
@@ -116,4 +118,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
 
-    print(f"Total reward: {total_reward}")
+    print(f"Total reward: {total_reward}, Score: {env.get_normalized_score(total_reward)}")
