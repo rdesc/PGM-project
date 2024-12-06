@@ -1,3 +1,11 @@
+import os
+# ## Ad mujoco path the LD_LIBRARY_PATH environment variable
+# mujoco_path = "/home/mila/f/faisal.mohamed/.mujoco/mujoco200/bin"
+# # Get the current LD_LIBRARY_PATH or initialize if not set
+# current_ld_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+# # Add the new path if it's not already present
+# if mujoco_path not in current_ld_library_path:
+#     os.environ["LD_LIBRARY_PATH"] = f"{mujoco_path}:{current_ld_library_path}"
 from dataclasses import dataclass, asdict
 from diffuser.datasets import SequenceDataset
 from diffusers import  UNet1DModel, DDPMScheduler
@@ -6,7 +14,6 @@ from accelerate import Accelerator
 from huggingface_hub import HfFolder, Repository, whoami
 from tqdm.auto import tqdm
 from pathlib import Path
-import os
 import torch
 import torch.nn.functional as F
 from diffusers import DDPMPipeline
@@ -16,6 +23,8 @@ import time
 import yaml
 import tyro
 import wandb
+
+
 
 # from  wonderwords import RandomWord
 
@@ -109,7 +118,7 @@ def save_configs(configs, save_path):
 
 @dataclass
 class TrainingConfig:
-    env_id: str = "hopper-medium-expert-v2"
+    env_id: str = "hopper-medium-v2"
     image_size: int = 128  # the generated image resolution
     train_batch_size: int = 16
     eval_batch_size: int = 1  # how many images to sample during evaluation
@@ -138,6 +147,10 @@ class TrainingConfig:
     num_workers: int = 1
     torch_compile: bool = True
     model_type: str = 'diffusion'
+    use_original_config: bool = False
+    train_on_one_traj: bool = False
+    use_grad_clip: bool = False # try training without gradient 
+    weight_decay: float = 0.01 # try training with weight decay zero
 
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer, save_path):
@@ -169,14 +182,19 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     save_configs(config, save_path)
     # save scheduler as well for evaluation
     scheduler.save_pretrained(save_path)
-
+    one_trajectory = None
     # Now you train the model
     for i in tqdm(range(int(config.n_train_steps))):
         # progress_bar = tqdm(total=int(config.n_train_steps), disable=not accelerator.is_local_main_process)
         # progress_bar.set_description(f"Epoch {i}")
-
         batch = next(train_dataloader)
         trajectories = batch.trajectories.to(device)
+        if config.train_on_one_traj:
+            if one_trajectory is None:
+                one_trajectory = torch.clone(trajectories[0][None, :])
+            trajectories = one_trajectory
+        # print(trajectories[0])
+        # import pdb;pdb.set_trace()
         trajectories = torch.permute(trajectories, (0,2,1) )
         # import pdb; pdb.set_trace()
         # Sample noise to add to the images
@@ -198,14 +216,25 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
         with accelerator.accumulate(model):
             # Predict the noise residual
-            noise_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
+            if config.use_original_config:
+                sample_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
+            else:
+                noise_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
             # condition on the first state
             if config.add_training_conditioning:
-                noise_pred[:, dataset.action_dim:, 0] = trajectories[:,  dataset.action_dim:, 0 ]
-            loss = F.mse_loss(noise_pred, noise)
+                if config.use_original_config:
+                    sample_pred[:, dataset.action_dim:, 0] = trajectories[:,  dataset.action_dim:, 0 ]
+                else:
+                    # we want the loss to cancel so we predict the noise not the trajectories
+                    noise_pred[:, dataset.action_dim:, 0] = noise[:,  dataset.action_dim:, 0 ]
+            if config.use_original_config:
+                loss = F.mse_loss(sample_pred, trajectories)
+            else:
+                loss = F.mse_loss(noise_pred, noise)
             accelerator.backward(loss)
 
-            accelerator.clip_grad_norm_(model.parameters(), 1.0)
+            if config.use_grad_clip:
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
@@ -284,8 +313,17 @@ if __name__ == "__main__":
 
 
     # create the schulduler 
+    if config.use_original_config:
+        scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,
+                                beta_schedule="squaredcos_cap_v2", 
+                                clip_sample=False, 
+                                variance_type="fixed_small_log",
+                                prediction_type="sample",
+                                )
+    else:
+        scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,beta_schedule="squaredcos_cap_v2")
+    # import pdb;pdb.set_trace()
 
-    scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,beta_schedule="squaredcos_cap_v2")
 
     # obs = obs[None].repeat(n_samples, axis=0)
     # conditions = {
@@ -299,7 +337,7 @@ if __name__ == "__main__":
     # create optimizer and lr scheduler
     from diffusers.optimization import get_cosine_schedule_with_warmup
 
-    optimizer = torch.optim.AdamW(network.parameters(), lr=config.learning_rate)
+    optimizer = torch.optim.AdamW(network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     # import pdb; pdb.set_trace()
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer=optimizer,

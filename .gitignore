@@ -2,7 +2,8 @@ bin/
 logs/
 wandb/
 runs/
-
+rendering/
+runs.zip
 *.sif
 
 fuse.cfg
@@ -144,3 +145,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+obs_from_diffusion.png
+diffuser/models/temporal.py
+scripts/hopper_medium_expert_h_32_new_sched_config.zip
+scripts/custom_valuepipline.py
+scripts/1733424961_medium_expert_h_128.zip
+diffuser/models/temporal.py
+scripts/train
