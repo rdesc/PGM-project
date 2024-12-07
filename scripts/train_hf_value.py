@@ -78,7 +78,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     train_dataloader = cycle(train_dataloader)
     if config.use_ema:
         ema = EMAModel(model.parameters(), 
-                        decay=0.995,
+                        decay=config.ema_decay,
                         model_cls=UNet1DModel,
                         model_config=value_network.config)
         ema.to(accelerator.device)
@@ -161,7 +161,7 @@ if __name__ == "__main__":
         )
     
         
-    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100)
+    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
     # net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 
