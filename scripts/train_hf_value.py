@@ -191,12 +191,13 @@ if __name__ == "__main__":
     print(scheduler_config)
     scheduler = DDPMScheduler.from_config(scheduler_config)
 
+    optimizer = torch.optim.Adam(value_network.parameters(), lr=config.learning_rate)
 
     if config.wandb_track:
         wandb.config["model_config"] = value_network_config
         wandb.config["scheduler_config"] = scheduler_config
+        wandb.config["optimizer"] = optimizer.__class__.__name__
 
-    optimizer = torch.optim.Adam(value_network.parameters(), lr=config.learning_rate)
 
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer=optimizer,
