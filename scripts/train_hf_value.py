@@ -42,6 +42,7 @@ class TrainingConfig:
     horizon: int = 32
     seed: int = 0
     use_ema: bool = True
+    discount_factor: float = 0.997
     ema_decay: float = 0.995
     update_ema_steps: int = 10
     update_ema_start: int = 2000
@@ -160,8 +161,8 @@ if __name__ == "__main__":
             entity="pgm-diffusion"
         )
     
-        
-    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997)
+    print("Discount factor:", config.discount_factor)
+    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=config.discount_factor)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
     # net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 
