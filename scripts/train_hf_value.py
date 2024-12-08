@@ -43,6 +43,7 @@ class TrainingConfig:
     horizon: int = 32
     seed: int = 0
     use_ema: bool = True
+    discount_factor: float = 0.997
     ema_decay: float = 0.995
     update_ema_steps: int = 10
     update_ema_start: int = 2000
@@ -79,7 +80,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     train_dataloader = cycle(train_dataloader)
     if config.use_ema:
         ema = EMAModel(model.parameters(), 
-                        decay=0.995,
+                        decay=config.ema_decay,
                         model_cls=UNet1DModel,
                         model_config=value_network.config)
         ema.to(accelerator.device)
@@ -163,11 +164,8 @@ if __name__ == "__main__":
         )
     
         
-    dataset = ValueDataset(config.env_id,
-                           horizon=config.horizon,
-                           normalizer="GaussianNormalizer" ,
-                           termination_penalty=-100,
-                           seed=config.seed)
+    print("Discount factor:", config.discount_factor)
+    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=config.discount_factor, seed=config.seed)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
     # net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 
@@ -196,12 +194,13 @@ if __name__ == "__main__":
     print(scheduler_config)
     scheduler = DDPMScheduler.from_config(scheduler_config)
 
+    optimizer = torch.optim.Adam(value_network.parameters(), lr=config.learning_rate)
 
     if config.wandb_track:
         wandb.config["model_config"] = value_network_config
         wandb.config["scheduler_config"] = scheduler_config
+        wandb.config["optimizer"] = optimizer.__class__.__name__
 
-    optimizer = torch.optim.Adam(value_network.parameters(), lr=config.learning_rate)
 
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer=optimizer,
