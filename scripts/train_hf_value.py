@@ -18,6 +18,7 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.datasets import ValueDataset
+from diffuser.utils import set_seed
 
 import tyro
 import wandb
@@ -149,6 +150,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
+    set_seed(config.seed)
     run_id = int(time.time())
     config.output_dir = f"{config.model_type}_{run_id}"
 
@@ -161,7 +163,11 @@ if __name__ == "__main__":
         )
     
         
-    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100)
+    dataset = ValueDataset(config.env_id,
+                           horizon=config.horizon,
+                           normalizer="GaussianNormalizer" ,
+                           termination_penalty=-100,
+                           seed=config.seed)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
     # net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 

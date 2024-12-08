@@ -12,6 +12,7 @@ import tqdm
 from diffusers.experimental import ValueGuidedRLPipeline
 from diffusers import  UNet1DModel, DDPMScheduler, DDPMPipeline
 from diffuser.utils.rendering import MuJoCoRenderer
+from diffuser.utils import set_seed
 from bc_d4rl import show_sample
 import tyro
 
@@ -41,6 +42,8 @@ class TrainingConfig:
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
 
+    set_seed(config.seed)
+
     print("config grad_scale", config.scale)
     env_name = config.env_name
 
@@ -51,6 +54,7 @@ if __name__ == "__main__":
         exit()
 
     env = gym.make(env_name)
+    env.seed(config.seed)
     renderer = MuJoCoRenderer(env_name)
 
     device = "cpu" if not torch.cuda.is_available() else "cuda"

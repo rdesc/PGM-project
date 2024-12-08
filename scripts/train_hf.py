@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from diffusers import DDPMPipeline
 import accelerate
 from diffuser.utils.rendering import MuJoCoRenderer
+from diffuser.utils import set_seed
 import time
 import yaml
 import tyro
@@ -276,8 +277,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
+    set_seed(config.seed)
     # env_id = 
-    dataset = SequenceDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer")
+    dataset = SequenceDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer", seed=config.seed)
     train_dataloader = cycle (torch.utils.data.DataLoader(
         dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True
         ))

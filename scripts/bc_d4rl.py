@@ -142,7 +142,9 @@ if __name__ == "__main__":
     num_epochs = 20
     num_inference_steps = 1000
     run_eval_only = True
-    pretrained_model_path = "bc_hopper-medium-v2_epoch1.safetensors"
+    eval_iters = 50
+    render = False
+    pretrained_model_path = "bc_hopper-medium-v2_epoch13.safetensors"
     normalize_state_actions = True
 
     seed = 0
@@ -170,19 +172,25 @@ if __name__ == "__main__":
 
     if run_eval_only:
 
-        with open(pretrained_model_path, "rb") as f:
-            data = f.read()
-        actor.load_state_dict(load(data))
+        scores = []
+        for i in range(eval_iters):
+            with open(pretrained_model_path, "rb") as f:
+                data = f.read()
+            actor.load_state_dict(load(data))
 
-        cum_reward = evaluate(env, actor,
-                              T=num_inference_steps,
-                              render=MuJoCoRenderer(env),
-                              filename=os.path.basename(pretrained_model_path).replace(".safetensors", ".mp4"))
-        score = env.get_normalized_score(cum_reward)
+            cum_reward = evaluate(env, actor,
+                                T=num_inference_steps,
+                                render=MuJoCoRenderer(env) if render else False,
+                                filename=str(i) + "-" + os.path.basename(pretrained_model_path).replace(".safetensors", ".mp4"))
+            score = env.get_normalized_score(cum_reward)
 
-        print(
-            f"Total Reward: {cum_reward}, Score: {score}"
-        )
+            scores.append(score)
+
+            print(
+                f"Total Reward: {cum_reward}, Score: {score}"
+            )
+
+        print("Average Score: ", np.mean(scores), "Std: ", np.std(scores))
 
     else:    
         optimizer = optim.AdamW(actor.parameters(), lr=1e-4, weight_decay=1e-4)

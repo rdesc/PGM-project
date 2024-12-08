@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from diffusers import DDPMPipeline
 import accelerate
 from diffuser.utils.rendering import MuJoCoRenderer
+from diffuser.utils import set_seed
 import time
 import yaml
 import numpy as np
@@ -86,6 +87,8 @@ if __name__ == "__main__":
 
     eval_config = tyro.cli(EvalConfig)
 
+    set_seed(eval_config.seed)
+
     render_file_name = eval_config.render_file_name if eval_config.render_file_name else eval_config.run_id + "_render"
     if os.path.exists(render_file_name + ".mp4") or os.path.exists(render_file_name + ".png"):
         print(f"File {render_file_name} already exists. Exiting.")
@@ -103,7 +106,7 @@ if __name__ == "__main__":
         if field_value is None and field_name != 'checkpoint_id':
             setattr(eval_config, field_name, getattr(training_config, field_name))
 
-    dataset = SequenceDataset(eval_config.env_id, horizon=eval_config.horizon, normalizer="GaussianNormalizer")
+    dataset = SequenceDataset(eval_config.env_id, horizon=eval_config.horizon, normalizer="GaussianNormalizer", seed=eval_config.seed)
 
     model_class = eval(model_config._class_name)
     model = model_class.from_pretrained(checkpoint_path).to(device)
