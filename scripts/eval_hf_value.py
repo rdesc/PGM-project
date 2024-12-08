@@ -36,7 +36,7 @@ class TrainingConfig:
     hf_repo: str = "bglick13/hopper-medium-v2-value-function-hor32"
     use_ema: bool = True
     torch_compile: bool = True
-
+    seed: int = 0
 
 
 if __name__ == "__main__":
@@ -73,13 +73,18 @@ if __name__ == "__main__":
         print("Loading diffusion model from ", pretrained_diff_path, config.checkpoint_diff_model)
 
         unet = UNet1DModel.from_pretrained(os.path.join(pretrained_diff_path, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model)))
-        scheduler = DDPMScheduler.from_pretrained(pretrained_diff_path)
-        print("num train timesteps", scheduler.num_train_timesteps)
         
+        scheduler = DDPMScheduler.from_pretrained(pretrained_diff_path,
+                                                  # below are kwargs to overwrite the config loaded from the pretrained model
+                                                  num_train_timesteps=config.num_train_timesteps,)
+
     else:
         print("Loading diffusion model from ", config.hf_repo)
         unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet", use_safe_tensors=False)
-        scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler")
+        scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler",
+                                                  # below are kwargs to overwrite the config loaded from the pretrained model
+                                                  num_train_timesteps=config.num_train_timesteps,)
+    print("num train timesteps", scheduler.num_train_timesteps)
     
     if config.torch_compile:
         value_function = torch.compile(value_function)
