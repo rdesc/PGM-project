@@ -9,7 +9,8 @@ import torch
 
 import gym
 import tqdm
-from diffusers.experimental import ValueGuidedRLPipeline
+# from diffusers.experimental import ValueGuidedRLPipeline
+from value_guided_sampling import ValueGuidedRLPipeline
 from diffusers import  UNet1DModel, DDPMScheduler, DDPMPipeline
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.utils import set_seed
