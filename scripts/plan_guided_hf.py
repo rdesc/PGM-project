@@ -19,8 +19,8 @@ import numpy as np
 import gym
 import jax
 from diffusers import DDPMScheduler, UNet1DModel
-from diffusers.experimental import ValueGuidedRLPipeline
-
+# from diffusers.experimental import ValueGuidedRLPipeline
+from value_guided_sampling import ValueGuidedRLPipeline
 
 
 def normalize(x_in, data, key):
@@ -113,7 +113,7 @@ if __name__ == "__main__":
 
     # convert a np observation to torch for model forward pass
     x = to_torch(x)
-    import pdb;pdb.set_trace()
+    # import pdb;pdb.set_trace()
     
     eta = 1.0 # noise factor for sampling reconstructed state
 
