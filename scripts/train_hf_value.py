@@ -153,7 +153,7 @@ if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
     set_seed(config.seed)
     run_id = int(time.time())
-    config.output_dir = f"{config.model_type}_{run_id}"
+    config.output_dir = f"runs/{config.model_type}_{run_id}"
 
     if config.wandb_track:
         wandb.init(
@@ -162,7 +162,6 @@ if __name__ == "__main__":
             project="diffusion_training",
             entity="pgm-diffusion"
         )
-    
         
     print("Discount factor:", config.discount_factor)
     dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=config.discount_factor, seed=config.seed)
@@ -188,11 +187,12 @@ if __name__ == "__main__":
         value_network = torch.compile(value_network)
 
     # create the schulduler 
-
-    # scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,beta_schedule="squaredcos_cap_v2")
     scheduler_config = DDPMScheduler.load_config(config.model_config_path, subfolder="scheduler")
     print(scheduler_config)
-    scheduler = DDPMScheduler.from_config(scheduler_config)
+    scheduler = DDPMScheduler.from_config(scheduler_config,
+                                          # below are kwargs to overwrite the config loaded from HF
+                                          num_train_timesteps=config.num_train_timesteps,
+                                          )
 
     optimizer = torch.optim.Adam(value_network.parameters(), lr=config.learning_rate)
 
