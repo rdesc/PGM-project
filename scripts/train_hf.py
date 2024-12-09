@@ -24,7 +24,7 @@ import time
 import yaml
 import tyro
 import wandb
-
+import copy
 
 
 # from  wonderwords import RandomWord
@@ -123,14 +123,13 @@ class TrainingConfig:
     image_size: int = 128  # the generated image resolution
     train_batch_size: int = 16
     eval_batch_size: int = 1  # how many images to sample during evaluation
-    num_epochs: int = 50
+    # num_epochs: int = 50
     gradient_accumulation_steps: int = 1
-    learning_rate: int = 1e-4
+    learning_rate: float = 1e-4
     lr_warmup_steps: int = 500
     cosine_warmup: bool = True
-    save_image_epochs: int = 10
     render_freq: int = 4200
-    save_model_epochs: int = 30
+    # save_model_epochs: int = 30
     num_train_timesteps: int = 100
     n_train_steps: int = int(200e3)
     n_train_step_per_epoch: int = 10_000
@@ -153,7 +152,17 @@ class TrainingConfig:
     train_on_one_traj: bool = False
     use_grad_clip: bool = False # try training without gradient 
     weight_decay: float = 0.01 # try training with weight decay zero
+    ema_decay: float = 0.995
+    save_ema: bool = True
+    action_weight: int = 1
+    update_ema_every: int = 10
 
+def update_ema(ema_model, model, decay):
+    with torch.no_grad():  
+        for ema_param, param in zip(ema_model.parameters(), model.parameters()):
+            ema_param.data.mul_(decay).add_(param.data, alpha=(1 - decay))
+    for ema_buffer, buffer in zip(ema_model.buffers(), model.buffers()):
+        ema_buffer.copy_(buffer)
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer, save_path):
     # Initialize accelerator and tensorboard logging
@@ -177,6 +186,11 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
+
+    # create ema model
+    model_ema = copy.deepcopy(model)
+    for param in model_ema.parameters():
+        param.requires_grad_(False)
 
     
     checkpoint_path = f"{save_path}/checkpoints"
@@ -229,11 +243,18 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 else:
                     # we want the loss to cancel so we predict the noise not the trajectories
                     noise_pred[:, dataset.action_dim:, 0] = noise[:,  dataset.action_dim:, 0 ]
+            loss_weights = torch.ones_like(trajectories)
+            loss_weights[:, :dataset.action_dim, 0] = config.action_weight
             if config.use_original_config:
-                loss = F.mse_loss(sample_pred, trajectories)
+                # loss = F.mse_loss(sample_pred, trajectories)
+                loss = F.mse_loss(sample_pred, trajectories, reduction='none')
             else:
-                loss = F.mse_loss(noise_pred, noise)
-            accelerator.backward(loss)
+                # loss = F.mse_loss(noise_pred, noise)
+                loss = F.mse_loss(noise_pred, trajectories, reduction='none')
+            # compute loss just for immediate action prediction, for logging
+            a0_loss = loss[:, :dataset.action_dim, 0].mean().detach().item()
+            weighted_loss = (loss * loss_weights).mean()
+            accelerator.backward(weighted_loss)
 
             if config.use_grad_clip:
                 accelerator.clip_grad_norm_(model.parameters(), 1.0)
@@ -241,8 +262,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             lr_scheduler.step()
             optimizer.zero_grad()
 
+            # update EMA
+            if (i + 1) % config.update_ema_every == 0:
+                update_ema(model_ema, model, config.ema_decay)
+
             # progress_bar.update(1)
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
+            logs = {"loss": weighted_loss.detach().item(), "a0_loss": a0_loss, "lr": lr_scheduler.get_last_lr()[0], "step": i}
             if config.wandb_track:
                 wandb.log(logs, step=i)
             # progress_bar.set_postfix(**logs)
@@ -253,6 +278,8 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         if (i+1) % config.checkpointing_freq == 0 :
             model_checkpoint_name = f"model_{i}.pth"
             model.save_pretrained(f"{checkpoint_path}/{model_checkpoint_name}")
+            if config.save_ema:
+                model_ema.save_pretrained(f"{checkpoint_path}/model_{i}_ema.pth")
             print("saved")
             # import pdb; pdb.set_trace()
 
@@ -284,8 +311,9 @@ if __name__ == "__main__":
     train_dataloader = cycle (torch.utils.data.DataLoader(
         dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True
         ))
-    n_epochs = config.n_train_steps // config.n_train_step_per_epoch
-    config.n_epochs = n_epochs
+    # n_epochs = config.n_train_steps // config.n_train_step_per_epoch
+    # config.n_epochs = n_epochs
+
     # batch = next(train_dataloader)
     # import pdb; pdb.set_trace()
     # print(batch)
