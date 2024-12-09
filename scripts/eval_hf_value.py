@@ -36,6 +36,7 @@ class TrainingConfig:
     hf_repo: str = "bglick13/hopper-medium-v2-value-function-hor32"
     use_ema: bool = True
     torch_compile: bool = True
+    seed: int = 0
 
 
 
