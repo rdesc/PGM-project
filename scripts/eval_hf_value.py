@@ -48,7 +48,7 @@ if __name__ == "__main__":
     env_name = config.env_name
 
     # check if file exists
-    file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_value_model) + "_render"
+    file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_value_model or config.hf_repo) + "_render"
     if os.path.exists(file_name_render + ".mp4") or os.path.exists(file_name_render + ".png"):
         print(f"File {file_name_render} already exists. Exiting.")
         exit()
