@@ -127,6 +127,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 1
     learning_rate: int = 1e-4
     lr_warmup_steps: int = 500
+    cosine_warmup: bool = True
     save_image_epochs: int = 10
     render_freq: int = 4200
     save_model_epochs: int = 30
@@ -337,15 +338,20 @@ if __name__ == "__main__":
     # shape = (batch_size, horizon, state_dim+action_dim)
 
     # create optimizer and lr scheduler
-    from diffusers.optimization import get_cosine_schedule_with_warmup
+    from diffusers.optimization import get_cosine_schedule_with_warmup, get_constant_schedule
 
     optimizer = torch.optim.AdamW(network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     # import pdb; pdb.set_trace()
-    lr_scheduler = get_cosine_schedule_with_warmup(
-        optimizer=optimizer,
-        num_warmup_steps=config.lr_warmup_steps,
-        num_training_steps=config.n_train_steps,
-    )
+    if config.cosine_warmup:
+        lr_scheduler = get_cosine_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=config.lr_warmup_steps,
+            num_training_steps=config.n_train_steps,
+        )
+    else:
+        lr_scheduler = get_constant_schedule(
+            optimizer=optimizer
+        )
     renderer = MuJoCoRenderer(config.env_id)
 
     # global_step = 0
