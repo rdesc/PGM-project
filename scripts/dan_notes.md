@@ -39,3 +39,19 @@ python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_di
 python3 train_hf.py --train_batch_size=64 --use_original_config --weight_decay=0.0 --horizon=32 --n_train_steps=1000000  --checkpointing_freq=100000 --render_freq=100000  --action_weight=10 --no-cosine_warmup --learning_rate=0.0002 --mixed_precision=no --num_train_timesteps=20
 
 python3 train_hf.py --train_batch_size=2048 --use_original_config --weight_decay=0.0 --horizon=32 --n_train_steps=1000000  --checkpointing_freq=100000 --render_freq=100000  --action_weight=10 --learning_rate=0.0002 
+
+## eval 1 mil models
+### this should be really close to the janner codebase now:?
+python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712655 --checkpoint_diff_model 799999_ema --file_name_render=render --torch_compile --env_name=hopper-medium-v2 --render_steps=50 --scale=0.1 --file_name_render=render_100d_800k_js_newsampling
+Total reward: 1585.5527152626878, Score: 0.4934058517598944
+
+python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712655 --checkpoint_diff_model 799999 --file_name_render=render --torch_compile --env_name=hopper-medium-v2 --render_steps=50 --scale=0.1 --file_name_render=render_100d_noema800k_js
+Total reward: 1558.021066076837, Score: 0.484946476270355
+
+## close to janner but with 20 timesteps
+python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712114 --checkpoint_diff_model 799999_ema --file_name_render=render --torch_compile --env_name=hopper-medium-v2 --render_steps=50 --scale=0.1 --file_name_render=render_100d_800k_js_20 --num_inference_steps=20
+
+
+## slightly better guy (big batch, cos schedule, )
+python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712280 --checkpoint_diff_model 799999_ema --file_name_render=render --torch_compile --env_name=hopper-medium-v2 --render_steps=50 --scale=0.1 --file_name_render=render_100d_800k_os
+
