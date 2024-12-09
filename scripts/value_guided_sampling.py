@@ -98,17 +98,22 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
                     # permute to match dimension for pre-trained models
                     y = self.value_function(x.permute(0, 2, 1), timesteps).sample
                     grad = torch.autograd.grad([y.sum()], [x])[0]
-                    print("grad", grad)
+                    # print("y mean", y.mean())
+                    # print("y max", y.max())
+                    # print("grad mean", grad.mean())
+                    # print("grad max", grad.max())
+                    # print("grad norm", torch.linalg.norm(grad))
 
-                    # posterior_variance = self.scheduler._get_variance(i)
-                    # model_std = torch.exp(0.5 * posterior_variance)
-                    # grad = model_std * grad
 
-                    posterior_std = self.scheduler._get_variance(i)
-                    posterior_log_std = torch.log(posterior_std)
-                    posterior_var = torch.exp(posterior_log_std * 2)
-                    print("post var", posterior_var)
-                    grad = posterior_var * grad
+                    posterior_variance = self.scheduler._get_variance(i)
+                    model_std = torch.exp(0.5 * posterior_variance)
+                    grad = model_std * grad
+
+                    # posterior_std = self.scheduler._get_variance(i)
+                    # posterior_log_std = torch.log(posterior_std)
+                    # posterior_var = torch.exp(posterior_log_std * 2)
+                    # # print("post var", posterior_var)
+                    # grad = posterior_var * grad
 
                 grad[timesteps < 2] = 0
                 x = x.detach()
