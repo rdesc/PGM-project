@@ -16,10 +16,10 @@ import numpy as np
 import torch
 import tqdm
 
-from ...models.unets.unet_1d import UNet1DModel
-from ...pipelines import DiffusionPipeline
-from ...utils.dummy_pt_objects import DDPMScheduler
-from ...utils.torch_utils import randn_tensor
+from diffusers import UNet1DModel
+from diffusers.pipelines import DiffusionPipeline
+from diffusers import DDPMScheduler
+from diffusers.utils.torch_utils import randn_tensor
 
 
 class ValueGuidedRLPipeline(DiffusionPipeline):
@@ -49,7 +49,6 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
         env,
     ):
         super().__init__()
-
         self.register_modules(value_function=value_function, unet=unet, scheduler=scheduler, env=env)
 
         self.data = env.get_dataset()
@@ -99,6 +98,7 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
                     # permute to match dimension for pre-trained models
                     y = self.value_function(x.permute(0, 2, 1), timesteps).sample
                     grad = torch.autograd.grad([y.sum()], [x])[0]
+                    print("grad", grad)
 
                     # posterior_variance = self.scheduler._get_variance(i)
                     # model_std = torch.exp(0.5 * posterior_variance)
@@ -107,6 +107,7 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
                     posterior_std = self.scheduler._get_variance(i)
                     posterior_log_std = torch.log(posterior_std)
                     posterior_var = torch.exp(posterior_log_std * 2)
+                    print("post var", posterior_var)
                     grad = posterior_var * grad
 
                 grad[timesteps < 2] = 0
