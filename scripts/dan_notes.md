@@ -30,6 +30,7 @@ python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_di
 ## gets to around 400 without falling!
 python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733689732 --checkpoint_diff_model 159999 --file_name_render=render --torch_compile --env_name=hopper-medium-v2 --render_steps=50 --scale=0.1 --file_name_render=render_159_0p1
 
+## this gets further
 python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733689732 --checkpoint_diff_model 199999 --file_name_render=render --torch_compile --env_name=hopper-medium-v2 --render_steps=50 --scale=0.1 --file_name_render=render_199_0p1
 (end: Total reward: 1942.957765482953, Score: 0.6032221399619366)
 
