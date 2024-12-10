@@ -20,6 +20,7 @@ from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.datasets import ValueDataset
 from diffuser.utils import set_seed
 
+from diffuser.models.temporal import ValueFunction
 import tyro
 import wandb
 
@@ -73,9 +74,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     # Prepare everything
     # There is no specific order to remember, you just need to unpack the
     # objects in the same order you gave them to the prepare method.
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+    model, optimizer, train_dataloader = accelerator.prepare(
+        model, optimizer, train_dataloader
     )
+    # model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+    #     model, optimizer, train_dataloader, lr_scheduler
+    # )
 
     train_dataloader = cycle(train_dataloader)
     if config.use_ema:
@@ -104,7 +108,6 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         timesteps = torch.randint(
             0, noise_scheduler.config.num_train_timesteps, (bs,), device=accelerator.device
         ).long()
-
         # Add noise to the clean images according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
         noisy_trajectories = noise_scheduler.add_noise(trajectories, noise, timesteps)
@@ -113,13 +116,16 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         with accelerator.accumulate(model):
             # Predict the noise residual
             values_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
+            # values_pred = model(noisy_trajectories.permute((0,2,1)), None, time=timesteps)
 
-            loss = F.mse_loss(values_pred, values)
+            loss = F.mse_loss(values_pred, values, reduction="mean")
+            # if i % 100 == 0:
+            #     print("Loss", i, ":", loss.item())
             accelerator.backward(loss)
 
             # accelerator.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-            lr_scheduler.step()
+            # lr_scheduler.step()
             optimizer.zero_grad()
 
             if config.use_ema and i % config.update_ema_steps == 0:
@@ -132,7 +138,8 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                     ema.step(model.parameters())
 
 
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
+            # logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
+            logs = {"loss": loss.detach().item(), "step": i}
             if config.wandb_track:
                 wandb.log(logs, step=i)
 
@@ -140,18 +147,20 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         if accelerator.is_main_process:
             if (i + 1) % config.save_model_steps == 0:
                 # print("Saving model....", "output_dir", config.output_dir, i+1, "loss", loss.detach().item()) 
-                accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "unet"), variant=str(i+1))
-    if config.use_ema:
-        ema.store(model.parameters())
-        ema.copy_to(model.parameters())
-        accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "ema"))
-        ema.restore(model.parameters())
+                if config.use_ema:
+                    ema.store(model.parameters())
+                    ema.copy_to(model.parameters())
+                    accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "ema"), variant=str(i+1))
+                    ema.restore(model.parameters())
+                else:
+                    accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "unet"), variant=str(i+1))
+
 
 
 
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
-    set_seed(config.seed)
+    # set_seed(config.seed)
     run_id = int(time.time())
     config.output_dir = f"runs/{config.model_type}_{run_id}"
 
@@ -164,25 +173,16 @@ if __name__ == "__main__":
         )
         
     print("Discount factor:", config.discount_factor)
-    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=config.discount_factor, seed=config.seed)
+    dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=config.discount_factor, seed=None)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
-    # net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 
-    #            "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], 
-    #            "up_block_types": [], "out_block_type": "ValueFunction", "mid_block_type": "ValueFunctionMidBlock1D", 
-    #            "block_out_channels": [32, 64, 128, 256, 512], "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, 
-    #            "out_channels": dataset.observation_dim + dataset.action_dim, "extra_in_channels": 0, "time_embedding_type": "positional", 
-    #            "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, "norm_num_groups": 8, "act_fn": "mish"}
-    
-    # if config.wandb_track:
-    #     wandb.config["network_parameters"] = net_args
-
-    # value_network = UNet1DModel(**net_args)
     value_network_config = UNet1DModel.load_config(config.model_config_path, subfolder="value_function")
-    print(value_network_config)
     value_network = UNet1DModel.from_config(value_network_config)
 
-
+    # value_network = ValueFunction(horizon=32,
+    #                               transition_dim=dataset.observation_dim + dataset.action_dim,
+    #                               cond_dim=dataset.observation_dim,
+    #                               dim_mults=(1,2,4,8))
     if config.torch_compile:
         value_network = torch.compile(value_network)
 
@@ -202,11 +202,12 @@ if __name__ == "__main__":
         wandb.config["optimizer"] = optimizer.__class__.__name__
 
 
-    lr_scheduler = get_cosine_schedule_with_warmup(
-        optimizer=optimizer,
-        num_warmup_steps=config.lr_warmup_steps,
-        num_training_steps=config.n_train_steps,
-    )
+    lr_scheduler = None
+    # get_cosine_schedule_with_warmup(
+    #     optimizer=optimizer,
+    #     num_warmup_steps=config.lr_warmup_steps,
+    #     num_training_steps=config.n_train_steps,
+    # )
     renderer = MuJoCoRenderer(config.env_id)
     args = (config, value_network, scheduler, optimizer, train_dataloader, lr_scheduler, renderer)
 
