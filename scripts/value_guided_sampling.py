@@ -78,7 +78,7 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
             return {k: self.to_torch(v) for k, v in x_in.items()}
         elif torch.is_tensor(x_in):
             return x_in.to(self.unet.device)
-        return torch.tensor(x_in, device=self.unet.device)
+        return torch.tensor(x_in, device=self.unet.device, dtype=self.unet.dtype)
 
     def reset_x0(self, x_in, cond, act_dim):
         for key, val in cond.items():
@@ -88,13 +88,12 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
     def run_diffusion(self, x, conditions, n_guide_steps, scale):
         batch_size = x.shape[0]
         y = None
-        for i in tqdm.tqdm(self.scheduler.timesteps):
+        for i in self.scheduler.timesteps:
             # create batch of timesteps to pass into model
             timesteps = torch.full((batch_size,), i, device=self.unet.device, dtype=torch.long)
             for _ in range(n_guide_steps):
                 with torch.enable_grad():
                     x.requires_grad_()
-
                     # permute to match dimension for pre-trained models
                     y = self.value_function(x.permute(0, 2, 1), timesteps).sample
                     grad = torch.autograd.grad([y.sum()], [x])[0]
@@ -105,15 +104,15 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
                     # print("grad norm", torch.linalg.norm(grad))
 
 
-                    posterior_variance = self.scheduler._get_variance(i)
-                    model_std = torch.exp(0.5 * posterior_variance)
-                    grad = model_std * grad
+                    # posterior_variance = self.scheduler._get_variance(i)
+                    # model_std = torch.exp(0.5 * posterior_variance)
+                    # grad = model_std * grad
 
-                    # posterior_std = self.scheduler._get_variance(i)
-                    # posterior_log_std = torch.log(posterior_std)
-                    # posterior_var = torch.exp(posterior_log_std * 2)
-                    # # print("post var", posterior_var)
-                    # grad = posterior_var * grad
+                    posterior_std = self.scheduler._get_variance(i)
+                    posterior_log_std = torch.log(posterior_std)
+                    posterior_var = torch.exp(posterior_log_std * 2)
+                    # print("post var", posterior_var)
+                    grad = posterior_var * grad
 
                 grad[timesteps < 2] = 0
                 x = x.detach()
@@ -139,7 +138,7 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
         shape = (batch_size, planning_horizon, self.state_dim + self.action_dim)
 
         # generate initial noise and apply our conditions (to make the trajectories start at current state)
-        x1 = randn_tensor(shape, device=self.unet.device)
+        x1 = randn_tensor(shape, device=self.unet.device, dtype=self.unet.dtype)
         x = self.reset_x0(x1, conditions, self.action_dim)
         x = self.to_torch(x)
 

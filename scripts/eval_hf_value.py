@@ -16,6 +16,9 @@ from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.utils import set_seed
 from bc_d4rl import show_sample
 import tyro
+import wandb
+from accelerate import Accelerator
+
 
 @dataclass
 class TrainingConfig:
@@ -38,12 +41,23 @@ class TrainingConfig:
     use_ema: bool = True
     torch_compile: bool = True
     seed: int = 0
+    wandb_track: bool = True
+    mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
 
 
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
 
-    set_seed(config.seed)
+
+    config.output_dir = f"eval/{config.pretrained_value_model.split("/")[-1]}"
+    if config.wandb_track:
+        wandb.init(
+            config=config,
+            name=config.output_dir,
+            project="diffusion_training",
+            entity="pgm-diffusion"
+        )
+    # set_seed(config.seed)
 
     print("config grad_scale", config.scale)
     env_name = config.env_name
@@ -55,15 +69,15 @@ if __name__ == "__main__":
         exit()
 
     env = gym.make(env_name)
-    env.seed(config.seed)
+    # env.seed(config.seed)
     renderer = MuJoCoRenderer(env_name)
 
     device = "cpu" if not torch.cuda.is_available() else "cuda"
 
     if not config.pretrained_value_model is None:
         print("Loading value model from ", config.pretrained_value_model, config.checkpoint_value_model, "use-ema:", config.use_ema)
-        value_function = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True, 
-                                                 subfolder="ema" if config.use_ema else "unet", variant= None if config.use_ema else str(config.checkpoint_value_model)).to(device)
+        value_function = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True,
+                                                 subfolder="ema" if config.use_ema else "unet", variant=str(config.checkpoint_value_model)).to(device)
 
     else:
         print("Loading value function from ", config.hf_repo)
@@ -73,7 +87,7 @@ if __name__ == "__main__":
         pretrained_diff_path = os.path.join(config.pretrained_diff_model, str(config.runid_diff_model))
         print("Loading diffusion model from ", pretrained_diff_path, config.checkpoint_diff_model)
 
-        unet = UNet1DModel.from_pretrained(os.path.join(pretrained_diff_path, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model)))
+        unet = UNet1DModel.from_pretrained(os.path.join(pretrained_diff_path, f"checkpoints/model_{config.checkpoint_diff_model}.pth"))
         
         scheduler = DDPMScheduler.from_pretrained(pretrained_diff_path,
                                                   # below are kwargs to overwrite the config loaded from the pretrained model
@@ -81,7 +95,7 @@ if __name__ == "__main__":
     else:
         print("Loading diffusion model from ", config.hf_repo)
         unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet", use_safe_tensors=False)
-        scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler",
+        scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler"
                                                   # below are kwargs to overwrite the config loaded from the pretrained model
                                                   )
     scheduler.set_timesteps(config.num_inference_steps)
@@ -91,6 +105,13 @@ if __name__ == "__main__":
         value_function = torch.compile(value_function)
         unet = torch.compile(unet)
         
+    print(unet.dtype)
+
+    accelerator = Accelerator(
+        mixed_precision=config.mixed_precision,
+    )
+    unet, value_function = accelerator.prepare(unet, value_function)
+
     pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=unet, scheduler=scheduler, env=env).to(device)
 
     obs = env.reset()
@@ -109,12 +130,15 @@ if __name__ == "__main__":
 
             # execute action in environment
             next_observation, reward, terminal, _ = env.step(denorm_actions)
-            score = env.get_normalized_score(total_reward)
             # update return
             total_reward += reward
-            print(
-                f"Step: {t}, Reward: {reward}, Total Reward: {total_reward}, Score: {score}"
-            )
+            score = env.get_normalized_score(total_reward)
+            logs = {"score": score, "total_reward":total_reward, "reward": reward, "step": t}
+            if config.wandb_track:
+                wandb.log(logs, step=t)
+            # print(
+            #     f"Step: {t}, Reward: {reward}, Total Reward: {total_reward}, Score: {score}"
+            # )
 
             # save observations for rendering
             rollout.append(next_observation.copy())
