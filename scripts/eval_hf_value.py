@@ -144,6 +144,8 @@ if __name__ == "__main__":
             rollout.append(next_observation.copy())
 
             obs = next_observation
+            if terminal:
+                break
         
             if (t+1) % config.render_steps == 0: 
                 show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
