@@ -48,8 +48,8 @@ class TrainingConfig:
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
 
-
-    config.output_dir = f"eval/{config.pretrained_value_model.split("/")[-1]}"
+    value_name = config.pretrained_value_model.split("/")[-1]
+    config.output_dir = f"eval/{value_name}"
     if config.wandb_track:
         wandb.init(
             config=config,
