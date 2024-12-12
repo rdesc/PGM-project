@@ -250,7 +250,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 loss = F.mse_loss(sample_pred, trajectories, reduction='none')
             else:
                 # loss = F.mse_loss(noise_pred, noise)
-                loss = F.mse_loss(noise_pred, trajectories, reduction='none')
+                loss = F.mse_loss(noise_pred, noise, reduction='none')
             # compute loss just for immediate action prediction, for logging
             a0_loss = loss[:, :dataset.action_dim, 0].mean().detach().item()
             weighted_loss = (loss * loss_weights).mean()
