@@ -55,13 +55,19 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
         self.means = {}
         for key in self.data.keys():
             try:
-                self.means[key] = self.data[key].mean()
+                if key in ['observations', 'actions']:
+                    self.means[key] = self.data[key].mean(axis=0)
+                else:
+                    self.means[key] = self.data[key].mean()
             except:  # noqa: E722
                 pass
         self.stds = {}
         for key in self.data.keys():
             try:
-                self.stds[key] = self.data[key].std()
+                if key in ['observations', 'actions']:
+                    self.stds[key] = self.data[key].std(axis=0)
+                else:
+                    self.stds[key] = self.data[key].std()
             except:  # noqa: E722
                 pass
         self.state_dim = env.observation_space.shape[0]
