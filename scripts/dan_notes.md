@@ -55,6 +55,7 @@ python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_di
 ## slightly better guy (big batch, cos schedule, )
 python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712280 --checkpoint_diff_model 799999_ema --file_name_render=render --torch_compile --env_name=hopper-medium-v2 --render_steps=50 --scale=0.1 --file_name_render=render_100d_800k_os
 
+<<<<<<< HEAD
 ## train our tansformer, 
 add here
 
@@ -64,3 +65,31 @@ python scripts/eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 -
 
 
 ## 
+=======
+## our diffusion model in their codebase is working!
+python scripts/plan_guided_diff.py --diffusion_epoch 800000 --value_epoch 160000 --loadbase logs/pretrained --seed 0 --scale 0.0 --dataset hopper-medium-v2
+
+seed 0:
+t: 999 | r: 1.03 |  R: 2480.86 | score: 0.7685 
+seed 1:
+t: 999 | r: 1.51 |  R: 3109.47 | score: 0.9616
+
+
+## trying debug
+python eval_hf_value_debug.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712655 --checkpoint_diff_model 799999_ema --pretrained_value_model runs/hopper-medium-v2/value_1733876588 --checkpoint_value_model=180000 --env_name=hopper-medium-v2 --render_steps=50 --scale=0.0 --file_name_render=render_debug --num_inference_steps=100 --no-torch_compile
+
+
+## working
+python eval_hf_value_debug.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712114 --checkpoint_diff_model 799999_ema --pretrained_value_model runs/hopper-medium-v2/value_1733876588 --checkpoint_value_model=180000 --env_name=hopper-medium-v2 --render_steps=2000 --scale=0.0 --file_name_render=render_debug --num_inference_steps=20 --torch_compile --seed=1
+
+## try 100 timestpe 
+python eval_hf_value_debug.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712655 --checkpoint_diff_model 799999_ema --pretrained_value_model runs/hopper-medium-v2/value_1733876588 --checkpoint_value_model=180000 --env_name=hopper-medium-v2 --render_steps=2000 --scale=0.0 --file_name_render=render_debug --num_inference_steps=100 --torch_compile --seed=1
+
+
+python3 train_hf_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000  --checkpointing_freq=100000 --render_freq=100000  --action_weight=10 --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile
+
+--no_wandb_track 
+
+## eval our transformer
+python scripts/eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 --file_name_render test_transformer_s01 --seed 0 --pretrained_diff_model runs/1734063759 --checkpoint_diff_model 799999
+>>>>>>> ca71587271b99bad7c46e72c6adaa9b1d749549a

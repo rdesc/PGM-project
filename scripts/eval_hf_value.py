@@ -114,7 +114,7 @@ if __name__ == "__main__":
                                                   )
     scheduler.set_timesteps(config.num_inference_steps)
     print("num train timesteps", scheduler.num_train_timesteps, "num inference timesteps", scheduler.num_inference_steps)
-    
+
     if config.torch_compile:
         value_function = torch.compile(value_function)
         diffusion_model = torch.compile(diffusion_model)

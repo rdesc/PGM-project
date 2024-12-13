@@ -90,7 +90,6 @@ def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeli
                 sample_states = x[:,:,dataset.action_dim:]
                 pred_states, pred_actions = model(sample_states, sample_actions, timesteps)
                 residual = torch.cat([pred_actions, pred_states], dim=-1)
-                print(residual.shape)
 
             # 2. use the model prediction to reconstruct an observation (de-noise)
             obs_reconstruct = scheduler.step(residual, i, x)["prev_sample"]
@@ -161,6 +160,9 @@ class TrainingConfig:
     save_ema: bool = True
     action_weight: int = 1
     update_ema_every: int = 10
+    nheads: int = 4
+    hidden_dim: int = 256
+    num_layers: int = 5
 
 def update_ema(ema_model, model, decay):
     with torch.no_grad():  
@@ -313,8 +315,11 @@ if __name__ == "__main__":
     # hidden_dim = 1024
     # nheads = 4
     # hidden_dim = 512
-    nheads = 4
-    hidden_dim = 256
+    # nheads = 4
+    # hidden_dim = 256
+    nheads = config.nheads
+    hidden_dim = config.hidden_dim
+    num_layers = config.num_layers
 
 
     transformer_config = dict(
@@ -322,7 +327,7 @@ if __name__ == "__main__":
         attention_head_dim = hidden_dim // nheads,
         # num_attention_heads = 8,
         # attention_head_dim = 1024 // 8,
-        num_layers = 5,
+        num_layers = num_layers,
         dropout = 0.0,
         attention_bias= False,
         activation_fn = "geglu",
