@@ -95,6 +95,17 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
         batch_size = x.shape[0]
         y = None
         for i in tqdm.tqdm(self.scheduler.timesteps):
+             # compute posterior variance
+            if self.scheduler.variance_type == "fixed_small_log": # returns std
+                posterior_std = self.scheduler._get_variance(i)
+                posterior_log_std = torch.log(posterior_std)
+                posterior_var = torch.exp(posterior_log_std * 2)
+                # print("post var", posterior_var)
+            elif self.scheduler.variance_type == "fixed_small": # returns var
+                posterior_var = self.scheduler._get_variance(i)
+            else:
+                raise NotImplementedError
+            
             # create batch of timesteps to pass into model
             timesteps = torch.full((batch_size,), i, device=self.unet.device, dtype=torch.long)
             for _ in range(n_guide_steps):
@@ -104,22 +115,7 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
                     # permute to match dimension for pre-trained models
                     y = self.value_function(x.permute(0, 2, 1), timesteps).sample
                     grad = torch.autograd.grad([y.sum()], [x])[0]
-                    # print("y mean", y.mean())
-                    # print("y max", y.max())
-                    # print("grad mean", grad.mean())
-                    # print("grad max", grad.max())
-                    # print("grad norm", torch.linalg.norm(grad))
-
-
-                    posterior_variance = self.scheduler._get_variance(i)
-                    model_std = torch.exp(0.5 * posterior_variance)
-                    grad = model_std * grad
-
-                    # posterior_std = self.scheduler._get_variance(i)
-                    # posterior_log_std = torch.log(posterior_std)
-                    # posterior_var = torch.exp(posterior_log_std * 2)
-                    # # print("post var", posterior_var)
-                    # grad = posterior_var * grad
+                    grad = posterior_var * grad
 
                 grad[timesteps < 2] = 0
                 x = x.detach()
