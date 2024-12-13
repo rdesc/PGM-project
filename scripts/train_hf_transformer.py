@@ -8,10 +8,12 @@ import os
 #     os.environ["LD_LIBRARY_PATH"] = f"{mujoco_path}:{current_ld_library_path}"
 from dataclasses import dataclass, asdict
 from diffuser.datasets import SequenceDataset
-from diffusers import  UNet1DModel, DDPMScheduler
+from diffusers import  DDPMScheduler
+from transformer_1d import DiffuserTransformer
 from tqdm import tqdm
 from accelerate import Accelerator
 from huggingface_hub import HfFolder, Repository, whoami
+from diffusers.optimization import get_cosine_schedule_with_warmup, get_constant_schedule
 from tqdm.auto import tqdm
 from pathlib import Path
 import torch
@@ -46,11 +48,12 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # def generate_samples(config, conditioning ,model, renderer, dataset, accelerator, scheduler, savepath ,n_samples=2, use_pipeline=False):
-def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeline=False, obs_only=True,):
+def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeline=False):
     generator = torch.Generator(device=device)
     shape = (config.eval_batch_size, config.horizon, dataset.observation_dim + dataset.action_dim,)
     x = torch.randn(shape, device=device, generator=generator).to(device)
     if use_pipeline:
+        raise NotImplementedError
         for i, t in enumerate(scheduler.timesteps):
             timesteps = torch.full((config.eval_batch_size,), t, device=device, dtype=torch.long)
             model_input = scheduler.scale_model_input(x, t)
@@ -60,7 +63,7 @@ def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeli
                 # print('c',conditioning.shape)
                 model_input[:, 0, dataset.action_dim: ] = conditioning
             with torch.no_grad():
-                noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
+                noise_pred = model(model_input.permute(0, 2, 1), timesteps)
                 noise_pred = noise_pred.permute(0, 2, 1) # needed to match model params to original
             x = scheduler.step(noise_pred, t, x).prev_sample
         if config.use_conditioning_for_sampling:
@@ -73,6 +76,7 @@ def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeli
 
         # run the diffusion process
         # for i in tqdm.tqdm(reversed(range(num_inference_steps)), total=num_inference_steps):
+        # import pdb; pdb.set_trace()
         if config.use_conditioning_for_sampling:
             x[:, 0, dataset.action_dim: ] = conditioning
         for i in tqdm(scheduler.timesteps):
@@ -82,8 +86,11 @@ def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeli
 
             # 1. generate prediction from model
             with torch.no_grad():
-                residual = model(x.permute(0, 2, 1), timesteps).sample
-                residual = residual.permute(0, 2, 1) # needed to match model params to original
+                sample_actions = x[:,:,:dataset.action_dim]
+                sample_states = x[:,:,dataset.action_dim:]
+                pred_states, pred_actions = model(sample_states, sample_actions, timesteps)
+                residual = torch.cat([pred_actions, pred_states], dim=-1)
+                print(residual.shape)
 
             # 2. use the model prediction to reconstruct an observation (de-noise)
             obs_reconstruct = scheduler.step(residual, i, x)["prev_sample"]
@@ -101,8 +108,7 @@ def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeli
             # 4. apply conditions to the trajectory
             # obs_reconstruct_postcond = reset_x0(obs_reconstruct, conditions, action_dim)
             x = obs_reconstruct
-    if obs_only:
-        x = x[:, : , dataset.action_dim:]
+    x = x[:, : , dataset.action_dim:]
     return x
 
 def render_samples(config, model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=2, use_pipeline=False, conditioning=None):
@@ -121,7 +127,6 @@ def save_configs(configs, save_path):
 @dataclass
 class TrainingConfig:
     env_id: str = "hopper-medium-v2"
-    image_size: int = 128  # the generated image resolution
     train_batch_size: int = 16
     eval_batch_size: int = 1  # how many images to sample during evaluation
     # num_epochs: int = 50
@@ -135,7 +140,6 @@ class TrainingConfig:
     n_train_steps: int = int(200e3)
     n_train_step_per_epoch: int = 10_000
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
-    output_dir: str = "ddpm-butterflies-128"  # the model name locally and on the HF Hub
     horizon: int = 128
     push_to_hub: bool = True  # whether to upload the saved model to the HF Hub
     hub_private_repo: bool = False
@@ -148,8 +152,8 @@ class TrainingConfig:
     wandb_track: bool = True
     num_workers: int = 1
     torch_compile: bool = True
-    model_type: str = 'diffusion'
-    use_original_config: bool = False
+    model_type: str = 'diffusion_transformer'
+    pred_noise: bool = False
     train_on_one_traj: bool = False
     use_grad_clip: bool = False # try training without gradient 
     weight_decay: float = 0.01 # try training with weight decay zero
@@ -170,15 +174,15 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        log_with="tensorboard",
-        project_dir=os.path.join(config.output_dir, "logs"),
+        # log_with="tensorboard",
+        # project_dir=os.path.join(config.output_dir, "logs"),
     )
     if accelerator.is_main_process:
         # if config.push_to_hub:
             # repo_name = get_full_repo_name(Path(config.output_dir).name)
             # repo = Repository(config.output_dir, clone_from=repo_name)
-        if config.output_dir is not None:
-            os.makedirs(config.output_dir, exist_ok=True)
+        # if config.output_dir is not None:
+        #     os.makedirs(config.output_dir, exist_ok=True)
         accelerator.init_trackers("train_example")
 
     # Prepare everything
@@ -210,11 +214,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             if one_trajectory is None:
                 one_trajectory = torch.clone(trajectories[0][None, :])
             trajectories = one_trajectory
-        # print(trajectories[0])
-        # import pdb;pdb.set_trace()
-        trajectories = torch.permute(trajectories, (0,2,1) )
-        # import pdb; pdb.set_trace()
+        # trajectories = torch.permute(trajectories, (0,2,1) )
         # Sample noise to add to the images
+
         noise = torch.randn(trajectories.shape).to(trajectories.device)
         bs = trajectories.shape[0]
 
@@ -227,33 +229,34 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         # (this is the forward diffusion process)
         noisy_trajectories = noise_scheduler.add_noise(trajectories, noise, timesteps)
         # condition on the first state
-        # import pdb; pdb.set_trace()
         if config.add_training_conditioning:
-            noisy_trajectories[:, dataset.action_dim:, 0 ] = trajectories[:, dataset.action_dim:, 0 ]
+            noisy_trajectories[:, 0,  dataset.action_dim:] = trajectories[:, 0, dataset.action_dim:]
 
+        noisy_states = noisy_trajectories[:,:, dataset.action_dim:]
+        noisy_actions = noisy_trajectories[:,:, :dataset.action_dim]
+        
         with accelerator.accumulate(model):
-            # Predict the noise residual
-            if config.use_original_config:
-                sample_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
-            else:
-                noise_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
+            (denoised_states, denoised_actions) = model(noisy_states, noisy_actions, timesteps)
+            pred = torch.cat((denoised_actions, denoised_states), dim=-1)
+            
             # condition on the first state
             if config.add_training_conditioning:
-                if config.use_original_config:
-                    sample_pred[:, dataset.action_dim:, 0] = trajectories[:,  dataset.action_dim:, 0 ]
+                if not config.pred_noise:
+                    pred[:, 0, dataset.action_dim:] = trajectories[:, 0,  dataset.action_dim: ]
                 else:
                     # we want the loss to cancel so we predict the noise not the trajectories
-                    noise_pred[:, dataset.action_dim:, 0] = noise[:,  dataset.action_dim:, 0 ]
-            loss_weights = torch.ones_like(trajectories)
-            loss_weights[:, :dataset.action_dim, 0] = config.action_weight
-            if config.use_original_config:
-                # loss = F.mse_loss(sample_pred, trajectories)
-                loss = F.mse_loss(sample_pred, trajectories, reduction='none')
+                    pred[:, 0, dataset.action_dim:] = noise[:, 0,  dataset.action_dim: ]
+
+            if not config.pred_noise:
+                # loss = F.mse_loss(pred, trajectories)
+                loss = F.mse_loss(pred, trajectories, reduction='none')
             else:
-                # loss = F.mse_loss(noise_pred, noise)
-                loss = F.mse_loss(noise_pred, noise, reduction='none')
-            # compute loss just for immediate action prediction, for logging
-            a0_loss = loss[:, :dataset.action_dim, 0].mean().detach().item()
+                # loss = F.mse_loss(pred, noise)
+                loss = F.mse_loss(pred, noise, reduction='none')
+            loss_weights = torch.ones_like(trajectories)
+            loss_weights[:, 0, :dataset.action_dim] = config.action_weight
+
+            a0_loss = loss[:, 0, :dataset.action_dim,].mean().detach().item()
             weighted_loss = (loss * loss_weights).mean()
             accelerator.backward(weighted_loss)
 
@@ -271,7 +274,6 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             logs = {"loss": weighted_loss.detach().item(), "a0_loss": a0_loss, "lr": lr_scheduler.get_last_lr()[0], "step": i}
             if config.wandb_track:
                 wandb.log(logs, step=i)
-            # progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=i)
             # global_step += 1
 
@@ -282,7 +284,6 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             if config.save_ema:
                 model_ema.save_pretrained(f"{checkpoint_path}/model_{i}_ema.pth")
             print("saved")
-            # import pdb; pdb.set_trace()
 
         if accelerator.is_main_process:
         #     pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
@@ -292,85 +293,71 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 os.makedirs(f"rendering/{config.env_id}", exist_ok=True)
                 # conditioning = condition if config.use_conditioning_for_sampling else None
                 if config.use_conditioning_for_sampling:
-                    condition = trajectories[:config.eval_batch_size,  dataset.action_dim:, 0]
+                    condition = trajectories[:config.eval_batch_size, 0,  dataset.action_dim:]
                 else:
                     condition = None
                 render_samples(config, model, renderer, dataset, accelerator,
                                noise_scheduler, savepath, config.eval_batch_size, use_pipeline=config.use_sample_hf_for_render, conditioning=condition)
-        #     if (epoch + 1) % config.save_model_epochs == 0 or epoch == config.num_epochs - 1:
-        #         if config.push_to_hub:
-        #             repo.push_to_hub(commit_message=f"Epoch {epoch}", blocking=True)
-        #         else:
-                    # pipeline.save_pretrained(config.output_dir)
 
 
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
     set_seed(config.seed)
-    # env_id = 
+
     dataset = SequenceDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer", seed=config.seed)
     train_dataloader = cycle (torch.utils.data.DataLoader(
         dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True
         ))
-    # n_epochs = config.n_train_steps // config.n_train_step_per_epoch
-    # config.n_epochs = n_epochs
 
-    # batch = next(train_dataloader)
-    # import pdb; pdb.set_trace()
-    # print(batch)
-    # import pdb; pdb.set_trace()
-    # network = UNet1DModel(
-        # in_channels=dataset.observation_dim + dataset.action_dim,  # the number of input channels, 3 for RGB images
-    #     out_channels=dataset.observation_dim + dataset.action_dim,  # the number of output channels
-    #     layers_per_block=1,  # how many ResNet layers to use per UNet block
-    #     block_out_channels=(32, 64, 128, 256),  # the number of output channels for each UNet block
-    #     down_block_types= ['DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D'],
-    #     up_block_types= ['UpResnetBlock1D', 'UpResnetBlock1D', 'UpResnetBlock1D'],
-    #     mid_block_type= 'MidResTemporalBlock1D',
-    #     time_embedding_type="positional",
-    #     flip_sin_to_cos=False,
-    #     use_timestep_embedding=True, 
-    #     freq_shift=1,
-    #     act_fn="mish",
-        
-    # )
-    net_args = {'sample_size': 65536, 'sample_rate': None, 'in_channels': dataset.observation_dim + dataset.action_dim, 'out_channels': dataset.observation_dim + dataset.action_dim, 'extra_in_channels': 0, 'time_embedding_type': 'positional', 'flip_sin_to_cos': False, 'use_timestep_embedding': True, 'freq_shift': 1, 'down_block_types': ['DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D'], 'up_block_types': ['UpResnetBlock1D', 'UpResnetBlock1D', 'UpResnetBlock1D'], 'mid_block_type': 'MidResTemporalBlock1D', 'out_block_type': 'OutConv1DBlock', 'block_out_channels': [32, 64, 128, 256], 'act_fn': 'mish', 'norm_num_groups': 8, 'layers_per_block': 1, 'downsample_each_block': False, '_use_default_values': ['sample_rate']}
-    network = UNet1DModel(**net_args).to(device)
+    # nheads = 8
+    # hidden_dim = 1024
+    # nheads = 4
+    # hidden_dim = 512
+    nheads = 4
+    hidden_dim = 256
+
+
+    transformer_config = dict(
+        num_attention_heads = nheads,
+        attention_head_dim = hidden_dim // nheads,
+        # num_attention_heads = 8,
+        # attention_head_dim = 1024 // 8,
+        num_layers = 5,
+        dropout = 0.0,
+        attention_bias= False,
+        activation_fn = "geglu",
+        num_embeds_ada_norm = config.num_train_timesteps,
+        upcast_attention = False,
+        norm_type = "ada_joker_norm_zero",  
+        norm_elementwise_affine = True,
+        norm_eps = 1e-5,
+        attention_type = "default",
+        interpolation_scale  = None,
+        positional_embeddings = "sinusoidal",
+        num_positional_embeddings = config.horizon * 2,
+        ff_inner_mult = 2,
+        state_dim = dataset.observation_dim,
+        action_dim = dataset.action_dim  ,
+    )
+
+    network = DiffuserTransformer(**transformer_config)
+    n_trainable = sum(p.numel() for p in network.parameters() if p.requires_grad)
+    print('trainable params:', n_trainable)
+
     if config.torch_compile:
         network = torch.compile(network)
-    # import pdb; pdb.set_trace()
-    # trajetory = next(train_dataloader).trajectories[0].unsqueeze(0).to(device)
-    # sample random initial noise vector
-    # output = network(trajetory, timestep=0)
-
-
+    
     # create the schulduler 
-    if config.use_original_config:
-        scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,
-                                beta_schedule="squaredcos_cap_v2", 
-                                clip_sample=False, 
-                                variance_type="fixed_small_log",
-                                prediction_type="sample",
-                                )
-    else:
-        scheduler = DDPMScheduler(num_train_timesteps=config.num_train_timesteps,beta_schedule="squaredcos_cap_v2")
-    # import pdb;pdb.set_trace()
+    scheduler = DDPMScheduler(
+        num_train_timesteps=config.num_train_timesteps,
+        beta_schedule="squaredcos_cap_v2", 
+        clip_sample=False, 
+        variance_type="fixed_small_log",
+        prediction_type="sample" if not config.pred_noise else "epsilon",
+    )
 
-
-    # obs = obs[None].repeat(n_samples, axis=0)
-    # conditions = {
-    #     0: to_torch(obs, device=DEVICE)
-    # }
-
-    # constants for inference
-    # batch_size = len(conditions[0])
-    # shape = (batch_size, horizon, state_dim+action_dim)
-
-    # create optimizer and lr scheduler
-    from diffusers.optimization import get_cosine_schedule_with_warmup, get_constant_schedule
 
     optimizer = torch.optim.AdamW(network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
-    # import pdb; pdb.set_trace()
     if config.cosine_warmup:
         lr_scheduler = get_cosine_schedule_with_warmup(
             optimizer=optimizer,
