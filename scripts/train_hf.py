@@ -46,7 +46,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # def generate_samples(config, conditioning ,model, renderer, dataset, accelerator, scheduler, savepath ,n_samples=2, use_pipeline=False):
-def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeline=False):
+def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeline=False, obs_only=True,):
     generator = torch.Generator(device=device)
     shape = (config.eval_batch_size, config.horizon, dataset.observation_dim + dataset.action_dim,)
     x = torch.randn(shape, device=device, generator=generator).to(device)
@@ -101,7 +101,8 @@ def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeli
             # 4. apply conditions to the trajectory
             # obs_reconstruct_postcond = reset_x0(obs_reconstruct, conditions, action_dim)
             x = obs_reconstruct
-    x = x[:, : , dataset.action_dim:]
+    if obs_only:
+        x = x[:, : , dataset.action_dim:]
     return x
 
 def render_samples(config, model, renderer, dataset, accelerator, noise_scheduler, savepath ,n_samples=2, use_pipeline=False, conditioning=None):
