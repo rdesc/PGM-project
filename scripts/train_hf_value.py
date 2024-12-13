@@ -19,6 +19,7 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.datasets import ValueDataset
 from diffuser.utils import set_seed
+from transformer_1d import ValueTransformer
 
 import tyro
 import wandb
@@ -52,9 +53,11 @@ class TrainingConfig:
     torch_compile: bool = True
     wandb_track: bool = True
     model_type: str = "value"
+    arch_type: str = "unet"
     model_config_path: str = "bglick13/hopper-medium-v2-value-function-hor32"
-
-
+    nheads: int = 4
+    hidden_dim: int = 256
+    num_layers: int = 5
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, renderer):
     # Initialize accelerator and tensorboard logging
@@ -94,7 +97,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         values = batch.values
         conditions = batch.conditions
 
-        trajectories = torch.permute(trajectories, (0,2,1) )
+        trajectories = torch.permute(trajectories, (0,2,1))
 
         # Sample noise to add to the images
         noise = torch.randn(trajectories.shape).to(accelerator.device)
@@ -167,21 +170,41 @@ if __name__ == "__main__":
     dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=config.discount_factor, seed=config.seed)
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True)
 
-    # net_args ={"in_channels": dataset.observation_dim + dataset.action_dim, 
-    #            "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], 
-    #            "up_block_types": [], "out_block_type": "ValueFunction", "mid_block_type": "ValueFunctionMidBlock1D", 
-    #            "block_out_channels": [32, 64, 128, 256, 512], "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, 
-    #            "out_channels": dataset.observation_dim + dataset.action_dim, "extra_in_channels": 0, "time_embedding_type": "positional", 
-    #            "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, "norm_num_groups": 8, "act_fn": "mish"}
+    assert config.arch_type in ['unet', 'transformer'], "Only unet and transformer are supported"
     
-    # if config.wandb_track:
-    #     wandb.config["network_parameters"] = net_args
+    if config.arch_type == 'unet':
+        value_network_config = UNet1DModel.load_config(config.model_config_path, subfolder="value_function")
+        print(value_network_config)
+        value_network = UNet1DModel.from_config(value_network_config)
+    else:
+        nheads = config.nheads
+        hidden_dim = config.hidden_dim
+        num_layers = config.num_layers
 
-    # value_network = UNet1DModel(**net_args)
-    value_network_config = UNet1DModel.load_config(config.model_config_path, subfolder="value_function")
-    print(value_network_config)
-    value_network = UNet1DModel.from_config(value_network_config)
 
+        value_network_config = dict(
+            num_attention_heads = nheads,
+            attention_head_dim = hidden_dim // nheads,
+            # num_attention_heads = 8,
+            # attention_head_dim = 1024 // 8,
+            num_layers = num_layers,
+            dropout = 0.0,
+            attention_bias= False,
+            activation_fn = "geglu",
+            num_embeds_ada_norm = config.num_train_timesteps,
+            upcast_attention = False,
+            norm_type = "ada_joker_norm_zero",  
+            norm_elementwise_affine = True,
+            norm_eps = 1e-5,
+            attention_type = "default",
+            interpolation_scale  = None,
+            positional_embeddings = "sinusoidal",
+            num_positional_embeddings = config.horizon * 2 + 1,
+            ff_inner_mult = 2,
+            state_dim = dataset.observation_dim,
+            action_dim = dataset.action_dim  ,
+        )
+        value_network = ValueTransformer(**value_network_config)
 
     if config.torch_compile:
         value_network = torch.compile(value_network)
