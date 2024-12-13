@@ -40,8 +40,12 @@ def generate_samples(config, conditioning, model, dataset, scheduler, use_pipeli
             model_input = scheduler.scale_model_input(x, t)
             
             model_input[:, config.history, dataset.action_dim:] = s_t
-            model_input[:, :config.history, :] = h_t.permute(0, 2, 1)
-            model_input[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+
+            if config.history:
+                model_input[:, :config.history, :] = h_t.permute(0, 2, 1)
+                model_input[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+            else:
+                model_input[:, :, :dataset.action_dim] = actions.permute(0, 2, 1)
 
             with torch.no_grad():
                 noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
@@ -50,8 +54,12 @@ def generate_samples(config, conditioning, model, dataset, scheduler, use_pipeli
         
         if config.use_conditioning_for_sampling:
             x[:, config.history, dataset.action_dim:] = s_t
-            x[:, :config.history, :] = h_t.permute(0, 2, 1)
-            x[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+
+            if config.history:
+                x[:, :config.history, :] = h_t.permute(0, 2, 1)
+                x[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+            else:
+                x[:, :, :dataset.action_dim] = actions.permute(0, 2, 1)
         
     else:
         # sample random initial noise vector
@@ -59,8 +67,12 @@ def generate_samples(config, conditioning, model, dataset, scheduler, use_pipeli
 
         # run the diffusion process
         x[:, config.history, dataset.action_dim:] = s_t
-        x[:, :config.history, :] = h_t.permute(0, 2, 1)
-        x[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+
+        if config.history:
+            x[:, :config.history, :] = h_t.permute(0, 2, 1)
+            x[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+        else:
+            x[:, :, :dataset.action_dim] = actions.permute(0, 2, 1)
 
         for i in tqdm(scheduler.timesteps):
 
@@ -85,8 +97,12 @@ def generate_samples(config, conditioning, model, dataset, scheduler, use_pipeli
             
             if config.use_conditioning_for_sampling:
                 obs_reconstruct[:, config.history, dataset.action_dim:] = s_t
-                obs_reconstruct[:, :config.history, :] = h_t.permute(0, 2, 1)
-                obs_reconstruct[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+
+                if config.history:
+                    obs_reconstruct[:, :config.history, :] = h_t.permute(0, 2, 1)
+                    obs_reconstruct[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+                else:
+                    obs_reconstruct[:, :, :dataset.action_dim] = actions.permute(0, 2, 1)
 
             # 4. apply conditions to the trajectory
             # obs_reconstruct_postcond = reset_x0(obs_reconstruct, conditions, action_dim)
@@ -135,7 +151,7 @@ class TrainingConfig:
     ema_decay: float = 0.995
     save_ema: bool = True
     update_ema_every: int = 10
-    history: int = 1  # hardcode to 1 for now
+    history: int = 0  # either 0 or 1 
     render_freq: int = 4200
 
 
@@ -198,7 +214,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
         # extract the current state and history
         s_t = trajectories[:, dataset.action_dim:, config.history]  # shape (bs, state_dim)
-        h_t = trajectories[:, :, :config.history]
+
+        if config.history:
+            h_t = trajectories[:, :, :config.history]
         
         # Sample noise to add to the images
         bs = trajectories.shape[0]
@@ -215,24 +233,37 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
         # add conditioning for the first state s_t, history h_t, and actions
         noisy_trajectories[:, dataset.action_dim:, config.history] = s_t
-        noisy_trajectories[:, :, :config.history] = h_t
         noisy_trajectories[:, :dataset.action_dim, :] = actions
+
+        if config.history:
+            noisy_trajectories[:, :, :config.history] = h_t
 
         with accelerator.accumulate(model):
             # Predict the noise residual
             if config.use_original_config:
-                sample_pred = model(noisy_trajectories[:, :, :-1], timesteps, return_dict=False)[0]  # clip the last timestep
+                if config.history:
+                    sample_pred = model(noisy_trajectories[:, :, :-1], timesteps, return_dict=False)[0]  # clip the last timestep
+                else:
+                    sample_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
 
             # else:
             #     noise_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
 
             # apply conditioning
             sample_pred[:, dataset.action_dim:, config.history] = s_t
-            sample_pred[:, :, :config.history] = h_t
-            sample_pred[:, :dataset.action_dim, :] = actions[:, :, :-1]
-            
+
+            if config.history:
+                sample_pred[:, :, :config.history] = h_t
+                sample_pred[:, :dataset.action_dim, :] = actions[:, :, :-1]  # skip the last timestep 
+            else:
+                sample_pred[:, :dataset.action_dim, :] = actions
+
             if config.use_original_config:
-                loss = F.mse_loss(sample_pred, trajectories[:, :, :-1], reduction='none')
+                
+                if config.history:
+                    loss = F.mse_loss(sample_pred, trajectories[:, :, :-1], reduction='none')  # skip the last timestep 
+                else:
+                    loss = F.mse_loss(sample_pred, trajectories, reduction='none')
             # else:
             #     # loss = F.mse_loss(noise_pred, noise)
             #     loss = F.mse_loss(noise_pred, trajectories, reduction='none')
@@ -273,9 +304,14 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 print("=========== Rendering ==========")
                 savepath=f"rendering/{config.env_id}/render_samples_{i}.png"
                 os.makedirs(f"rendering/{config.env_id}", exist_ok=True)
-                conditions = (s_t[:config.eval_batch_size],
-                              h_t[:config.eval_batch_size],
-                              actions[:config.eval_batch_size])
+                if config.history:
+                    conditions = (s_t[:config.eval_batch_size],
+                                  h_t[:config.eval_batch_size],
+                                  actions[:config.eval_batch_size])
+                else:
+                    conditions = (s_t[:config.eval_batch_size],
+                                  None,
+                                  actions[:config.eval_batch_size])
 
                 x = generate_samples(config, conditions, model, dataset, noise_scheduler)
                 observations = dataset.normalizer.unnormalize(x.cpu().numpy(), 'observations')
