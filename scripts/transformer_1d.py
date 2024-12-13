@@ -2,21 +2,21 @@ import torch
 from torch import nn
 
 from typing import Any, Dict, Tuple, Optional
-from diffusers.models.modeling_utils import LegacyModelMixin
-from diffusers.configuration_utils import LegacyConfigMixin, register_to_config
+from diffusers.models.modeling_utils import ModelMixin, LegacyModelMixin
+from diffusers.configuration_utils import ConfigMixin, register_to_config, ConfigMixin
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.utils import deprecate, is_torch_version, logging
 from transformer_block import BasicTransformerBlock
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-# class Transformer1DModelOutput(Transformer2DModelOutput):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
+class DiffuserTransformerPolicyOutput(Transformer2DModelOutput):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 
 
-class Transformer1DModel(LegacyModelMixin, LegacyConfigMixin):
+class Transformer1DModel(ModelMixin, ConfigMixin):
     """
 
     Parameters:
@@ -123,7 +123,7 @@ class Transformer1DModel(LegacyModelMixin, LegacyConfigMixin):
 
 
 
-class DiffuserTransformer(LegacyModelMixin, LegacyConfigMixin):
+class DiffuserTransformer(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = False
     _no_split_modules = ["BasicTransformerBlock"]
 
@@ -161,9 +161,9 @@ class DiffuserTransformer(LegacyModelMixin, LegacyConfigMixin):
         self,
         # history_states, # B x 1 x s 
         # history_actions, # B x 1 x a
-        sample_states, # b x H x s 
-        sample_actions, # b x H x s 
-        timestep: Optional[torch.LongTensor],
+        sample_states: torch.Tensor, # b x H x s 
+        sample_actions: torch.Tensor, # b x H x s 
+        timestep: torch.LongTensor,
         # attention_mask: Optional[torch.Tensor] = None,
     ):
         # history_state_embeds = self.embed_state(history_states)
@@ -193,3 +193,27 @@ class DiffuserTransformer(LegacyModelMixin, LegacyConfigMixin):
         out_actions = self.project_action(out_action_embeds)
 
         return (out_states, out_actions)
+    
+
+class DiffuserTransformerPolicy(nn.Module):
+     
+    def __init__(self, diffuser):
+        super().__init__()
+        self.diffuser = diffuser
+        self.action_dim = self.diffuser.config.action_dim
+        self.state_dim = self.diffuser.config.state_dim
+        self.dtype = self.diffuser.dtype
+        self.device = self.diffuser.device
+        
+    def forward(self, sample, timestep):
+        if sample.shape[1] == self.action_dim + self.state_dim: 
+            sample = sample.permute(0, 2, 1)
+
+        assert sample.shape[2] == self.action_dim + self.state_dim
+
+        sample_actions = sample[:,:, :self.action_dim]
+        sample_states = sample[:,:, self.action_dim:]
+        out_states, out_actions = self.diffuser(sample_states, sample_actions, timestep)
+        out_sample = torch.cat([out_actions, out_states], dim=-1)
+        out_sample = out_sample.permute(0, 2, 1)
+        return DiffuserTransformerPolicyOutput(sample=out_sample)
