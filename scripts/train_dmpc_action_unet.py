@@ -42,8 +42,12 @@ def generate_samples(config, conditioning, model, dataset, scheduler, use_pipeli
             model_input = scheduler.scale_model_input(x, t)
 
             s_t_expanded = s_t.unsqueeze(2).repeat(1, 1, config.horizon)  # batch_size x state_dim x horizon
-            h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
-            model_input = torch.cat([model_input.permute(0, 2, 1), s_t_expanded, h_t_expanded], dim=1)
+
+            if config.history:
+                h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
+                model_input = torch.cat([model_input.permute(0, 2, 1), s_t_expanded, h_t_expanded], dim=1)
+            else:
+                model_input = torch.cat([model_input.permute(0, 2, 1), s_t_expanded], dim=1)
             
             with torch.no_grad():
                 noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
@@ -58,8 +62,12 @@ def generate_samples(config, conditioning, model, dataset, scheduler, use_pipeli
 
         # run the diffusion process
         s_t_expanded = s_t.unsqueeze(2).repeat(1, 1, config.horizon)  # batch_size x state_dim x horizon
-        h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
-        x = torch.cat([x.permute(0, 2, 1), s_t_expanded, h_t_expanded], dim=1).permute(0, 2, 1)
+
+        if config.history:
+            h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
+            x = torch.cat([x.permute(0, 2, 1), s_t_expanded, h_t_expanded], dim=1).permute(0, 2, 1)
+        else:
+            x = torch.cat([x.permute(0, 2, 1), s_t_expanded], dim=1).permute(0, 2, 1)
 
         for i in tqdm(scheduler.timesteps):
 
@@ -130,7 +138,7 @@ class TrainingConfig:
     learning_rate: float = 1e-4
     lr_warmup_steps: int = 500
     cosine_warmup: bool = True
-    num_train_timesteps: int = 100
+    num_train_timesteps: int = 100  # set 
     n_train_steps: int = int(200e3)
     n_train_step_per_epoch: int = 10_000
     mixed_precision: str = "fp16"  # `no` for float32, `fp16` for automatic mixed precision
@@ -154,7 +162,7 @@ class TrainingConfig:
     ema_decay: float = 0.995
     save_ema: bool = True
     update_ema_every: int = 10
-    history: int = 1  # hardcode to 1 for now
+    history: int = 0  # 0 or 1
     render_freq: int = 4200 
 
 
@@ -217,7 +225,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
 
         # extract the history and the current state
         s_t = trajectories[:, dataset.action_dim:, config.history]  # shape (bs, state_dim)
-        h_t = trajectories[:, :, :config.history]  # shape (bs, state_dim + action_dim, history)
+        
+        if config.history:
+            h_t = trajectories[:, :, :config.history]  # shape (bs, state_dim + action_dim, history)
         
         # Sample noise to add to the images
         bs = trajectories.shape[0]
@@ -237,9 +247,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         
         # add conditioning for the first state s_t and the history h_t
         s_t_expanded = s_t.unsqueeze(2).repeat(1, 1, config.horizon)  # batch_size x state_dim x horizon
-        h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
 
-        noisy_trajectories = torch.cat([noisy_trajectories, s_t_expanded, h_t_expanded], dim=1)
+        if config.history:
+            h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
+            noisy_trajectories = torch.cat([noisy_trajectories, s_t_expanded, h_t_expanded], dim=1)
+        else:
+            noisy_trajectories = torch.cat([noisy_trajectories, s_t_expanded], dim=1)
 
         with accelerator.accumulate(model):
             # Predict the noise residual
@@ -291,8 +304,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 print("=========== Rendering ==========")
                 savepath=f"rendering/{config.env_id}/render_samples_{i}.png"
                 os.makedirs(f"rendering/{config.env_id}", exist_ok=True)
-                conditions = (s_t[:config.eval_batch_size],
-                              h_t[:config.eval_batch_size])
+                if config.history:
+                    conditions = (s_t[:config.eval_batch_size],
+                                  h_t[:config.eval_batch_size])
+                else:
+                    conditions = (s_t[:config.eval_batch_size],
+                                  None)
 
                 x = generate_samples(config, conditions, model, dataset, noise_scheduler)
                 observations = dataset.normalizer.unnormalize(x.cpu().numpy(), 'observations')
