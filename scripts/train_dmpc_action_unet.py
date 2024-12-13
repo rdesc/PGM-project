@@ -11,6 +11,8 @@ import torch
 import torch.nn.functional as F
 from diffusers import DDPMPipeline
 import accelerate
+import numpy as np
+import gym
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffusers.optimization import get_cosine_schedule_with_warmup, get_constant_schedule
 from diffuser.utils import set_seed
@@ -27,6 +29,90 @@ def cycle(dl):
             yield data
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def generate_samples(config, conditioning, model, dataset, scheduler, use_pipeline=False, obs_only=True,):
+    generator = torch.Generator(device=device)
+    shape = (config.eval_batch_size, config.horizon, dataset.action_dim,)
+    x = torch.randn(shape, device=device, generator=generator).to(device)
+    s_t, h_t = conditioning
+    if use_pipeline:
+        for i, t in enumerate(scheduler.timesteps):
+            timesteps = torch.full((config.eval_batch_size,), t, device=device, dtype=torch.long)
+            model_input = scheduler.scale_model_input(x, t)
+
+            s_t_expanded = s_t.unsqueeze(2).repeat(1, 1, config.horizon)  # batch_size x state_dim x horizon
+            h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
+            model_input = torch.cat([model_input.permute(0, 2, 1), s_t_expanded, h_t_expanded], dim=1)
+            
+            with torch.no_grad():
+                noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
+                noise_pred = noise_pred.permute(0, 2, 1) # needed to match model params to original
+            x = scheduler.step(noise_pred, t, x).prev_sample
+
+        # if config.use_conditioning_for_sampling:
+        
+    else:
+        # sample random initial noise vector
+        eta = 1.0 # noise factor for sampling reconstructed state
+
+        # run the diffusion process
+        s_t_expanded = s_t.unsqueeze(2).repeat(1, 1, config.horizon)  # batch_size x state_dim x horizon
+        h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
+        x = torch.cat([x.permute(0, 2, 1), s_t_expanded, h_t_expanded], dim=1).permute(0, 2, 1)
+
+        for i in tqdm(scheduler.timesteps):
+
+            # create batch of timesteps to pass into model
+            timesteps = torch.full((config.eval_batch_size,), i, device=device, dtype=torch.long)
+
+            # 1. generate prediction from model
+            with torch.no_grad():
+                residual = model(x.permute(0, 2, 1), timesteps).sample
+                residual = residual.permute(0, 2, 1) # needed to match model params to original
+
+            # 2. use the model prediction to reconstruct an observation (de-noise)
+            obs_reconstruct = scheduler.step(residual, i, x)["prev_sample"]
+
+            # 3. [optional] add posterior noise to the sample
+            if eta > 0:
+                noise = torch.randn(obs_reconstruct.shape, generator=generator, device=device)
+                posterior_variance = scheduler._get_variance(i) # * noise
+                # no noise when t == 0
+                # NOTE: original implementation missing sqrt on posterior_variance
+                obs_reconstruct = obs_reconstruct + int(i>0) * (0.5 * posterior_variance) * eta* noise  # MJ had as log var, exponentiated
+            
+            # if config.use_conditioning_for_sampling:
+
+            # 4. apply conditions to the trajectory
+            # obs_reconstruct_postcond = reset_x0(obs_reconstruct, conditions, action_dim)
+            x = obs_reconstruct
+    if obs_only:
+        # for each action get the corresponding observation
+        observations = []
+        for i in range(config.eval_batch_size):
+            curr_observations = []
+            env = gym.make(config.env_id)
+            env.reset()
+            start_state = s_t[i].cpu().numpy()
+            denorm_state = dataset.normalizer.unnormalize(start_state, 'observations')
+
+            env.sim.data.qpos[1:] = denorm_state[:5]  # FIXME robot’s x-coordinate (rootx) not included... 
+            env.sim.data.qvel[:] = denorm_state[5:]
+
+            for j in range(config.horizon):
+                curr_action = x[i][j][:dataset.action_dim].cpu().numpy()
+                denorm_action = dataset.normalizer.unnormalize(curr_action, 'actions')
+                # execute action in environment
+                next_observation, *_ = env.step(denorm_action)
+
+                curr_observations.append(next_observation)
+
+            observations.append(curr_observations)
+        
+        x = torch.tensor(np.array(observations))
+
+    return x
 
 
 def save_configs(configs, save_path):
@@ -69,6 +155,7 @@ class TrainingConfig:
     save_ema: bool = True
     update_ema_every: int = 10
     history: int = 1  # hardcode to 1 for now
+    render_freq: int = 4200 
 
 
 def update_ema(ema_model, model, decay):
@@ -192,12 +279,24 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             # global_step += 1
 
         # After each epoch you optionally sample some demo images with evaluate() and save the model
-        if (i+1) % config.checkpointing_freq == 0 :
+        if (i + 1) % config.checkpointing_freq == 0 :
             model_checkpoint_name = f"model_{i}.pth"
             model.save_pretrained(f"{checkpoint_path}/{model_checkpoint_name}")
             if config.save_ema:
                 model_ema.save_pretrained(f"{checkpoint_path}/model_{i}_ema.pth")
             print("saved")
+
+        if accelerator.is_main_process:
+            if (i + 1) % config.render_freq == 0:
+                print("=========== Rendering ==========")
+                savepath=f"rendering/{config.env_id}/render_samples_{i}.png"
+                os.makedirs(f"rendering/{config.env_id}", exist_ok=True)
+                conditions = (s_t[:config.eval_batch_size],
+                              h_t[:config.eval_batch_size])
+
+                x = generate_samples(config, conditions, model, dataset, noise_scheduler)
+                observations = dataset.normalizer.unnormalize(x.cpu().numpy(), 'observations')
+                renderer.composite(savepath, observations)
 
 
 if __name__ == "__main__":
