@@ -29,6 +29,73 @@ def cycle(dl):
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def generate_samples(config, conditioning, model, dataset, scheduler, use_pipeline=False, obs_only=True,):
+    generator = torch.Generator(device=device)
+    shape = (config.eval_batch_size, config.horizon, dataset.observation_dim + dataset.action_dim,)
+    x = torch.randn(shape, device=device, generator=generator).to(device)
+    s_t, h_t, actions = conditioning
+    if use_pipeline:
+        for i, t in enumerate(scheduler.timesteps):
+            timesteps = torch.full((config.eval_batch_size,), t, device=device, dtype=torch.long)
+            model_input = scheduler.scale_model_input(x, t)
+            
+            model_input[:, config.history, dataset.action_dim:] = s_t
+            model_input[:, :config.history, :] = h_t.permute(0, 2, 1)
+            model_input[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+
+            with torch.no_grad():
+                noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
+                noise_pred = noise_pred.permute(0, 2, 1) # needed to match model params to original
+            x = scheduler.step(noise_pred, t, x).prev_sample
+        
+        if config.use_conditioning_for_sampling:
+            x[:, config.history, dataset.action_dim:] = s_t
+            x[:, :config.history, :] = h_t.permute(0, 2, 1)
+            x[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+        
+    else:
+        # sample random initial noise vector
+        eta = 1.0 # noise factor for sampling reconstructed state
+
+        # run the diffusion process
+        x[:, config.history, dataset.action_dim:] = s_t
+        x[:, :config.history, :] = h_t.permute(0, 2, 1)
+        x[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+
+        for i in tqdm(scheduler.timesteps):
+
+            # create batch of timesteps to pass into model
+            timesteps = torch.full((config.eval_batch_size,), i, device=device, dtype=torch.long)
+
+            # 1. generate prediction from model
+            with torch.no_grad():
+                residual = model(x.permute(0, 2, 1), timesteps).sample
+                residual = residual.permute(0, 2, 1) # needed to match model params to original
+
+            # 2. use the model prediction to reconstruct an observation (de-noise)
+            obs_reconstruct = scheduler.step(residual, i, x)["prev_sample"]
+
+            # 3. [optional] add posterior noise to the sample
+            if eta > 0:
+                noise = torch.randn(obs_reconstruct.shape, generator=generator, device=device)
+                posterior_variance = scheduler._get_variance(i) # * noise
+                # no noise when t == 0
+                # NOTE: original implementation missing sqrt on posterior_variance
+                obs_reconstruct = obs_reconstruct + int(i>0) * (0.5 * posterior_variance) * eta* noise  # MJ had as log var, exponentiated
+            
+            if config.use_conditioning_for_sampling:
+                obs_reconstruct[:, config.history, dataset.action_dim:] = s_t
+                obs_reconstruct[:, :config.history, :] = h_t.permute(0, 2, 1)
+                obs_reconstruct[:, :, :dataset.action_dim] = actions[:, :, :-1].permute(0, 2, 1)
+
+            # 4. apply conditions to the trajectory
+            # obs_reconstruct_postcond = reset_x0(obs_reconstruct, conditions, action_dim)
+            x = obs_reconstruct
+    if obs_only:
+        x = x[:, :, dataset.action_dim:]
+    return x
+
+
 def save_configs(configs, save_path):
     file_path = f"{save_path}/config.yaml"
     with open(file_path, 'w') as f:
@@ -69,6 +136,7 @@ class TrainingConfig:
     save_ema: bool = True
     update_ema_every: int = 10
     history: int = 1  # hardcode to 1 for now
+    render_freq: int = 4200
 
 
 def update_ema(ema_model, model, decay):
@@ -126,12 +194,11 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             trajectories = one_trajectory
 
         trajectories = torch.permute(trajectories, (0,2,1) )  # shape (bs, state_dim + action_dim, horizon + history)
-        actions = trajectories[:, :dataset.action_dim, config.history:]  # shape (bs, action_dim, horizon)
-        states = trajectories[:, dataset.action_dim:, config.history:]  # shape (bs, state_dim, horizon)
+        actions = trajectories[:, :dataset.action_dim, :]  # shape (bs, action_dim, horizon)
 
-        # extract the history and the current state
+        # extract the current state and history
         s_t = trajectories[:, dataset.action_dim:, config.history]  # shape (bs, state_dim)
-        h_t = trajectories[:, :, :config.history]  # shape (bs, state_dim + action_dim, history)
+        h_t = trajectories[:, :, :config.history]
         
         # Sample noise to add to the images
         bs = trajectories.shape[0]
@@ -146,29 +213,26 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         # (this is the forward diffusion process)
         noisy_trajectories = noise_scheduler.add_noise(trajectories, noise, timesteps)
 
-        # set the appropiate shape
-        noisy_trajectories = noisy_trajectories[:, :, config.history:]  # shape (bs, action_dim + state_dim, horizon)
-        
         # add conditioning for the first state s_t, history h_t, and actions
-        noisy_trajectories[:, dataset.action_dim:, 0] = s_t
+        noisy_trajectories[:, dataset.action_dim:, config.history] = s_t
+        noisy_trajectories[:, :, :config.history] = h_t
         noisy_trajectories[:, :dataset.action_dim, :] = actions
-        h_t_expanded = h_t.repeat(1, 1, config.horizon)  # batch_size x (action_dim + state_dim) x horizon
-        noisy_trajectories = torch.cat([noisy_trajectories, h_t_expanded], dim=1)  # batch_size x (action_dim + state_dim + history * (action_dim + state_dim)) x horizon
 
         with accelerator.accumulate(model):
             # Predict the noise residual
             if config.use_original_config:
-                sample_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
+                sample_pred = model(noisy_trajectories[:, :, :-1], timesteps, return_dict=False)[0]  # clip the last timestep
 
             # else:
             #     noise_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
 
             # apply conditioning
-            sample_pred[:, dataset.action_dim: dataset.action_dim + dataset.observation_dim, 0] = s_t
-
+            sample_pred[:, dataset.action_dim:, config.history] = s_t
+            sample_pred[:, :, :config.history] = h_t
+            sample_pred[:, :dataset.action_dim, :] = actions[:, :, :-1]
+            
             if config.use_original_config:
-                # no need to take loss over entire sample_pred right? just states
-                loss = F.mse_loss(sample_pred[:, dataset.action_dim: dataset.action_dim + dataset.observation_dim], states, reduction='none')
+                loss = F.mse_loss(sample_pred, trajectories[:, :, :-1], reduction='none')
             # else:
             #     # loss = F.mse_loss(noise_pred, noise)
             #     loss = F.mse_loss(noise_pred, trajectories, reduction='none')
@@ -204,6 +268,19 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 model_ema.save_pretrained(f"{checkpoint_path}/model_{i}_ema.pth")
             print("saved")
 
+        if accelerator.is_main_process:
+            if (i + 1) % config.render_freq == 0:
+                print("=========== Rendering ==========")
+                savepath=f"rendering/{config.env_id}/render_samples_{i}.png"
+                os.makedirs(f"rendering/{config.env_id}", exist_ok=True)
+                conditions = (s_t[:config.eval_batch_size],
+                              h_t[:config.eval_batch_size],
+                              actions[:config.eval_batch_size])
+
+                x = generate_samples(config, conditions, model, dataset, noise_scheduler)
+                observations = dataset.normalizer.unnormalize(x.cpu().numpy(), 'observations')
+                renderer.composite(savepath, observations)
+
 
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
@@ -222,7 +299,7 @@ if __name__ == "__main__":
         dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True
         ))
 
-    net_args = {'sample_size': 65536, 'sample_rate': None, 'in_channels': dataset.observation_dim + dataset.action_dim + config.history * (dataset.action_dim + dataset.observation_dim), 'out_channels': dataset.observation_dim + dataset.action_dim + config.history * (dataset.action_dim + dataset.observation_dim), 'extra_in_channels': 0, 'time_embedding_type': 'positional', 'flip_sin_to_cos': False, 'use_timestep_embedding': True, 'freq_shift': 1, 'down_block_types': ['DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D'], 'up_block_types': ['UpResnetBlock1D', 'UpResnetBlock1D', 'UpResnetBlock1D'], 'mid_block_type': 'MidResTemporalBlock1D', 'out_block_type': 'OutConv1DBlock', 'block_out_channels': [32, 64, 128, 256], 'act_fn': 'mish', 'norm_num_groups': 8, 'layers_per_block': 1, 'downsample_each_block': False, '_use_default_values': ['sample_rate']}
+    net_args = {'sample_size': 65536, 'sample_rate': None, 'in_channels': dataset.observation_dim + dataset.action_dim, 'out_channels': dataset.observation_dim + dataset.action_dim, 'extra_in_channels': 0, 'time_embedding_type': 'positional', 'flip_sin_to_cos': False, 'use_timestep_embedding': True, 'freq_shift': 1, 'down_block_types': ['DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D', 'DownResnetBlock1D'], 'up_block_types': ['UpResnetBlock1D', 'UpResnetBlock1D', 'UpResnetBlock1D'], 'mid_block_type': 'MidResTemporalBlock1D', 'out_block_type': 'OutConv1DBlock', 'block_out_channels': [32, 64, 128, 256], 'act_fn': 'mish', 'norm_num_groups': 8, 'layers_per_block': 1, 'downsample_each_block': False, '_use_default_values': ['sample_rate']}
     network = UNet1DModel(**net_args).to(device)
     if config.torch_compile:
         network = torch.compile(network)
@@ -264,6 +341,3 @@ if __name__ == "__main__":
     args = (config, network, scheduler, optimizer, train_dataloader, lr_scheduler, renderer, save_path)
     
     train_loop(*args)
-
-
-# TODO: add evaluation of the model

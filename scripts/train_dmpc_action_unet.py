@@ -162,7 +162,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             #     noise_pred = model(noisy_trajectories, timesteps, return_dict=False)[0]
 
             if config.use_original_config:
-                # no need to take loss over sample_pred right?
+                # no need to take loss over entire sample_pred right? just actions
                 loss = F.mse_loss(sample_pred[:, :dataset.action_dim], actions, reduction='none')
             # else:
             #     # loss = F.mse_loss(noise_pred, noise)
