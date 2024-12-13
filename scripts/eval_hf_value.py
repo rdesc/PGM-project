@@ -1,4 +1,5 @@
 import os 
+import json
 from dataclasses import dataclass, asdict
 from typing import Optional
 
@@ -12,10 +13,16 @@ import tqdm
 # from diffusers.experimental import ValueGuidedRLPipeline
 from value_guided_sampling import ValueGuidedRLPipeline
 from diffusers import  UNet1DModel, DDPMScheduler, DDPMPipeline
+from transformer_1d import DiffuserTransformer, DiffuserTransformerPolicy
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.utils import set_seed
 from bc_d4rl import show_sample
 import tyro
+from diffuser.datasets import ValueDataset
+
+MAPPING_DICT = {
+    DiffuserTransformer: DiffuserTransformerPolicy,
+}
 
 @dataclass
 class TrainingConfig:
@@ -54,8 +61,9 @@ if __name__ == "__main__":
         print(f"File {file_name_render} already exists. Exiting.")
         exit()
 
-    env = gym.make(env_name)
-    env.seed(config.seed)
+    dataset = ValueDataset(env_name, horizon=config.planning_horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)
+    env = dataset.env
+    # env.seed(config.seed)
     renderer = MuJoCoRenderer(env_name)
 
     device = "cpu" if not torch.cuda.is_available() else "cuda"
@@ -63,24 +71,44 @@ if __name__ == "__main__":
     if not config.pretrained_value_model is None:
         print("Loading value model from ", config.pretrained_value_model, config.checkpoint_value_model, "use-ema:", config.use_ema)
         value_function = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True, 
-                                                 subfolder="ema" if config.use_ema else "unet", variant= None if config.use_ema else str(config.checkpoint_value_model)).to(device)
+                                                 subfolder="ema" if config.use_ema else "unet", variant=str(config.checkpoint_value_model)).to(device)
 
     else:
         print("Loading value function from ", config.hf_repo)
         value_function = UNet1DModel.from_pretrained(config.hf_repo, subfolder="value_function", use_safe_tensors=False)
 
     if not config.pretrained_diff_model is None:
-        pretrained_diff_path = os.path.join(config.pretrained_diff_model, str(config.runid_diff_model))
-        print("Loading diffusion model from ", pretrained_diff_path, config.checkpoint_diff_model)
+        if config.use_ema:
+            model_diff_path = os.path.join(config.pretrained_diff_model, "checkpoints/model_{}_ema.pth".format(config.checkpoint_diff_model))
+        else:
+            model_diff_path = os.path.join(config.pretrained_diff_model, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model))
 
-        unet = UNet1DModel.from_pretrained(os.path.join(pretrained_diff_path, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model)))
+        print("Loading diffusion model from ", model_diff_path)
+        #
+        # load config in model_diff_path/config.json
+        with open(os.path.join(model_diff_path, "config.json"), "rb") as f:
+            model_config = json.load(f)
+
+        class_str = model_config["_class_name"]
+        class_name = eval(class_str)
+        print(class_name)
+        # diffusion_model = UNet1DModel.from_pretrained(model_diff_path)
+        diffusion_model = class_name.from_pretrained(model_diff_path).to(device)
         
-        scheduler = DDPMScheduler.from_pretrained(pretrained_diff_path,
+        if class_name in MAPPING_DICT:
+            print("Mapping class")
+            diffusion_model = MAPPING_DICT[class_name](diffusion_model)
+        # import pdb; pdb.set_trace()
+        # if type(class_name) == DiffuserTransformer:
+        #     diffusion_model = DiffuserTransformerPolicy(diffusion_model)
+        
+        scheduler = DDPMScheduler.from_pretrained(config.pretrained_diff_model,
                                                   # below are kwargs to overwrite the config loaded from the pretrained model
                                                   )
+        # print(scheduler.config)
     else:
         print("Loading diffusion model from ", config.hf_repo)
-        unet = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet", use_safe_tensors=False)
+        diffusion_model = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet", use_safe_tensors=False)
         scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler",
                                                   # below are kwargs to overwrite the config loaded from the pretrained model
                                                   )
@@ -89,9 +117,9 @@ if __name__ == "__main__":
 
     if config.torch_compile:
         value_function = torch.compile(value_function)
-        unet = torch.compile(unet)
+        diffusion_model = torch.compile(diffusion_model)
         
-    pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=unet, scheduler=scheduler, env=env).to(device)
+    pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=diffusion_model, scheduler=scheduler, env=env).to(device)
 
     obs = env.reset()
     total_reward = 0
@@ -109,9 +137,11 @@ if __name__ == "__main__":
 
             # execute action in environment
             next_observation, reward, terminal, _ = env.step(denorm_actions)
-            score = env.get_normalized_score(total_reward)
             # update return
             total_reward += reward
+            # compute score
+            score = env.get_normalized_score(total_reward)
+
             print(
                 f"Step: {t}, Reward: {reward}, Total Reward: {total_reward}, Score: {score}"
             )
@@ -120,7 +150,11 @@ if __name__ == "__main__":
             rollout.append(next_observation.copy())
 
             obs = next_observation
-        
+
+            # if terminal:
+            #     show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
+            #     renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])  
+            #     break
             if (t+1) % config.render_steps == 0: 
                 show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
                 renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
