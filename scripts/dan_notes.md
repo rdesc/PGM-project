@@ -55,6 +55,12 @@ python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_di
 ## slightly better guy (big batch, cos schedule, )
 python eval_hf_value.py --pretrained_diff_model runs/hopper-medium-v2 --runid_diff_model 1733712280 --checkpoint_diff_model 799999_ema --file_name_render=render --torch_compile --env_name=hopper-medium-v2 --render_steps=50 --scale=0.1 --file_name_render=render_100d_800k_os
 
+## train our tansformer, 
+add here
+
 
 ## eval our transformer
 python scripts/eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 --file_name_render test_transformer_s01 --seed 0 --pretrained_diff_model runs/1734063759 --checkpoint_diff_model 799999
+
+
+## 
