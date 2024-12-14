@@ -110,7 +110,7 @@ if __name__ == "__main__":
         if config.ddim:
             print("using ddim")
             scheduler = DDIMScheduler.from_pretrained(
-                pretrained_diff_path,
+                pretrained_diff_path, eta = config.eta,
             ) #  when we call step/forward defaults to eta=0.0 , deterministic
         else:
             print("using ddpm")

@@ -84,7 +84,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     if config.use_ema:
         ema = EMAModel(model.parameters(), 
                         decay=config.ema_decay,
-                        model_cls=UNet1DModel if config.arch_type=="unet" else ValueTransformer,
+                        model_cls = UNet1DModel if config.arch_type=="unet" else ValueTransformer,
                         model_config=value_network.config)
         ema.to(accelerator.device)
 
@@ -144,13 +144,13 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             if (i + 1) % config.save_model_steps == 0:
                 # print("Saving model....", "output_dir", config.output_dir, i+1, "loss", loss.detach().item()) 
                 if config.use_ema:
-                    accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "unet"), variant=str(i+1))
+                    accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, config.arch_type), variant=str(i+1))
                     ema.store(model.parameters())
                     ema.copy_to(model.parameters())
                     accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "ema"), variant=str(i+1))
                     ema.restore(model.parameters())
                 else:
-                    accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, "unet"), variant=str(i+1))
+                    accelerator.unwrap_model(model).save_pretrained(os.path.join(config.output_dir, config.arch_type), variant=str(i+1))
 
 
 

@@ -89,3 +89,11 @@ python scripts/eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 -
 
 ## train value function
 sbatch my_train scripts/train_hf_value.py --arch_type transformer
+
+## train action proposal
+train_hf_action_proposal.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000 --action_weight=10 --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile
+
+
+## train state dyn
+train_hf_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000  --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile
+
