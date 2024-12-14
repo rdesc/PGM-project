@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass, asdict
 from diffuser.datasets import SequenceDataset
 from diffusers import  DDPMScheduler
-from transformer_1d import DiffuserTransformer
+from transformer_1d import DynamicsTransformer
 from tqdm import tqdm
 from accelerate import Accelerator
 from huggingface_hub import HfFolder, Repository, whoami
@@ -28,26 +28,14 @@ import tyro
 import wandb
 import copy
 
-
-# from  wonderwords import RandomWord
-
-# def make_random_name():
-#     r = RandomWord()
-#     name = "-".join(
-#         [r.word(word_min_length=3, word_max_length=7, include_parts_of_speech=["adjective"]),
-#             r.word(word_min_length=5, word_max_length=7, include_parts_of_speech=["noun"])])
-#     return name
-
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def cycle(dl):
     while True:
         for data in dl:
             yield data
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
 
-
-# def generate_samples(config, conditioning ,model, renderer, dataset, accelerator, scheduler, savepath ,n_samples=2, use_pipeline=False):
 def generate_samples(config, conditioning ,model, dataset, scheduler, use_pipeline=False):
     generator = torch.Generator(device=device)
     shape = (config.eval_batch_size, config.horizon, dataset.observation_dim + dataset.action_dim,)
@@ -151,7 +139,7 @@ class TrainingConfig:
     wandb_track: bool = True
     num_workers: int = 1
     torch_compile: bool = True
-    model_type: str = 'diffusion_transformer'
+    model_type: str = 'dynamics_transformer'
     pred_noise: bool = False
     train_on_one_traj: bool = False
     use_grad_clip: bool = False # try training without gradient 
@@ -177,15 +165,8 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     accelerator = Accelerator(
         mixed_precision=config.mixed_precision,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
-        # log_with="tensorboard",
-        # project_dir=os.path.join(config.output_dir, "logs"),
     )
     if accelerator.is_main_process:
-        # if config.push_to_hub:
-            # repo_name = get_full_repo_name(Path(config.output_dir).name)
-            # repo = Repository(config.output_dir, clone_from=repo_name)
-        # if config.output_dir is not None:
-        #     os.makedirs(config.output_dir, exist_ok=True)
         accelerator.init_trackers("train_example")
 
     # Prepare everything
@@ -217,51 +198,43 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             if one_trajectory is None:
                 one_trajectory = torch.clone(trajectories[0][None, :])
             trajectories = one_trajectory
-        # trajectories = torch.permute(trajectories, (0,2,1) )
-        # Sample noise to add to the images
 
-        noise = torch.randn(trajectories.shape).to(trajectories.device)
-        bs = trajectories.shape[0]
+
+        states = trajectories[:,:, dataset.action_dim:]
+        actions = trajectories[:,:, :dataset.action_dim]
+
+        state_noise = torch.randn(states.shape).to(states.device)
+        bs = states.shape[0]
 
         # Sample a random timestep for each image
         timesteps = torch.randint(
-            0, noise_scheduler.config.num_train_timesteps, (bs,), device=trajectories.device
+            0, noise_scheduler.config.num_train_timesteps, (bs,), device=states.device
         ).long()
 
         # Add noise to the clean images according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
-        noisy_trajectories = noise_scheduler.add_noise(trajectories, noise, timesteps)
+        noisy_states = noise_scheduler.add_noise(states, state_noise, timesteps)
+
         # condition on the first state
         if config.add_training_conditioning:
-            noisy_trajectories[:, 0,  dataset.action_dim:] = trajectories[:, 0, dataset.action_dim:]
+            noisy_states[:, 0] = states[:, 0]
 
-        noisy_states = noisy_trajectories[:,:, dataset.action_dim:]
-        noisy_actions = noisy_trajectories[:,:, :dataset.action_dim]
         
         with accelerator.accumulate(model):
-            (denoised_states, denoised_actions) = model(noisy_states, noisy_actions, timesteps)
-            pred = torch.cat((denoised_actions, denoised_states), dim=-1)
+            pred_states = model(noisy_states, actions, timesteps)
             
             # condition on the first state
             if config.add_training_conditioning:
                 if not config.pred_noise:
-                    pred[:, 0, dataset.action_dim:] = trajectories[:, 0,  dataset.action_dim: ]
+                    pred_states[:, 0] = states[:, 0]
                 else:
                     # we want the loss to cancel so we predict the noise not the trajectories
-                    pred[:, 0, dataset.action_dim:] = noise[:, 0,  dataset.action_dim: ]
+                    pred_states[:, 0] = state_noise[:, 0]
 
-            if not config.pred_noise:
-                # loss = F.mse_loss(pred, trajectories)
-                loss = F.mse_loss(pred, trajectories, reduction='none')
-            else:
-                # loss = F.mse_loss(pred, noise)
-                loss = F.mse_loss(pred, noise, reduction='none')
-            loss_weights = torch.ones_like(trajectories)
-            loss_weights[:, 0, :dataset.action_dim] = config.action_weight
-
-            a0_loss = loss[:, 0, :dataset.action_dim,].mean().detach().item()
-            weighted_loss = (loss * loss_weights).mean()
-            accelerator.backward(weighted_loss)
+            target = states  if not config.pred_noise else state_noise
+            loss = F.mse_loss(pred_states, target, reduction='mean')
+                
+            accelerator.backward(loss)
 
             if config.use_grad_clip:
                 accelerator.clip_grad_norm_(model.parameters(), config.grad_clip_val)
@@ -274,7 +247,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 update_ema(model_ema, model, config.ema_decay)
 
             # progress_bar.update(1)
-            logs = {"loss": weighted_loss.detach().item(), "a0_loss": a0_loss, "lr": lr_scheduler.get_last_lr()[0], "step": i}
+            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
             if config.wandb_track:
                 wandb.log(logs, step=i)
             accelerator.log(logs, step=i)
@@ -288,19 +261,20 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 model_ema.save_pretrained(f"{checkpoint_path}/model_{i}_ema.pth")
             print("saved")
 
-        if accelerator.is_main_process:
-        #     pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
-            if (i + 1) % config.render_freq == 0:
-                print("=========== Rendering ==========")
-                savepath=f"rendering/{config.env_id}/render_samples_{i}.png"
-                os.makedirs(f"rendering/{config.env_id}", exist_ok=True)
-                # conditioning = condition if config.use_conditioning_for_sampling else None
-                if config.use_conditioning_for_sampling:
-                    condition = trajectories[:config.eval_batch_size, 0,  dataset.action_dim:]
-                else:
-                    condition = None
-                render_samples(config, model, renderer, dataset, accelerator,
-                               noise_scheduler, savepath, config.eval_batch_size, use_pipeline=config.use_sample_hf_for_render, conditioning=condition)
+        # TODO add rendering later
+        # if accelerator.is_main_process:
+        # #     pipeline = DDPMPipeline(unet=accelerator.unwrap_model(model), scheduler=noise_scheduler)
+        #     if (i + 1) % config.render_freq == 0:
+        #         print("=========== Rendering ==========")
+        #         savepath=f"rendering/{config.env_id}/render_samples_{i}.png"
+        #         os.makedirs(f"rendering/{config.env_id}", exist_ok=True)
+        #         # conditioning = condition if config.use_conditioning_for_sampling else None
+        #         if config.use_conditioning_for_sampling:
+        #             condition = trajectories[:config.eval_batch_size, 0,  dataset.action_dim:]
+        #         else:
+        #             condition = None
+        #         render_samples(config, model, renderer, dataset, accelerator,
+        #                        noise_scheduler, savepath, config.eval_batch_size, use_pipeline=config.use_sample_hf_for_render, conditioning=condition)
 
 
 if __name__ == "__main__":
@@ -346,7 +320,7 @@ if __name__ == "__main__":
         action_dim = dataset.action_dim  ,
     )
 
-    network = DiffuserTransformer(**transformer_config)
+    network = DynamicsTransformer(**transformer_config)
     n_trainable = sum(p.numel() for p in network.parameters() if p.requires_grad)
     print('trainable params:', n_trainable)
 

@@ -306,3 +306,140 @@ class ValueTransformer(ModelMixin, ConfigMixin):
         hidden_value_embed = hidden_embeds[:,-1,:] # B, inner_dim
         value = self.value_head(hidden_value_embed)
         return value
+    
+class ActionProposalTransformer(ModelMixin, ConfigMixin):
+    _supports_gradient_checkpointing = False
+    _no_split_modules = ["BasicTransformerBlock"]
+
+    @register_to_config
+    def __init__(
+        self,
+        num_attention_heads: int = 8,
+        attention_head_dim: int = 1024 // 8,
+        num_layers: int = 1,
+        dropout: float = 0.0,
+        attention_bias: bool = False,
+        activation_fn: str = "geglu",
+        num_embeds_ada_norm: Optional[int] = None,
+        upcast_attention: bool = False,
+        norm_type: str = "ada_joker_norm_zero",  # 'layer_norm', 'ada_norm', 'ada_norm_zero', 'ada_norm_single', 'ada_norm_continuous', 'layer_norm_i2vgen'
+        norm_elementwise_affine: bool = True,
+        norm_eps: float = 1e-5,
+        attention_type: str = "default",
+        interpolation_scale: float = None,
+        positional_embeddings: str = "sinusoidal",
+        num_positional_embeddings: int = 1000,
+        ff_inner_mult: int = 2,
+        state_dim: int = 1,
+        action_dim: int = 1  
+    ):
+        super().__init__()
+        self.transformer = Transformer1DModel(**self.config)
+        self.embed_state = nn.Linear(self.config.state_dim, self.transformer.inner_dim)
+        self.embed_action = nn.Linear(self.config.action_dim, self.transformer.inner_dim)
+        self.project_action =  nn.Linear(self.transformer.inner_dim, self.config.action_dim)
+        # NOTE, we are not using Fourier positional embeddings, and the 256 thing
+
+    def forward(
+        self,
+        # history_states, # B x 1 x s 
+        # history_actions, # B x 1 x a
+        initial_state: torch.Tensor, # b x 1 x s 
+        sample_actions: torch.Tensor, # b x H x s 
+        timestep: torch.LongTensor,
+        # attention_mask: Optional[torch.Tensor] = None,
+    ):
+        # history_state_embeds = self.embed_state(history_states)
+        # history_actions_embeds = self.embed_action(history_actions)
+        # combined_states = torch.cat([history_states, sample_states])
+        # combined_actions = torch.cat([history_actions, sample_actions])
+
+        # assert initial_state.shape[1] == sample_actions.shape[1], 'state action mistmatch'
+        if len(initial_state.shape) == 2:
+            initial_state = initial_state.unsqueeze(1)
+        assert initial_state.shape[1] == 1, 'only want one state'
+
+        state_embed = self.embed_state(initial_state)
+        action_embeds = self.embed_action(sample_actions)
+
+        horizon = sample_actions.shape[1]
+        batch_size = sample_actions.shape[0]
+
+        combined_embeds  = torch.stack(
+            (state_embed, action_embeds), dim=1
+        ).permute(0, 2, 1, 3).reshape(batch_size, horizon + 1, self.transformer.inner_dim)
+
+        hidden_embeds = self.transformer(combined_embeds, timestep)
+        out_action_embeds = hidden_embeds[:, 1:]        
+        
+        out_actions = self.project_action(out_action_embeds)
+
+        return out_actions
+    
+class DynamicsTransformer(ModelMixin, ConfigMixin):
+    _supports_gradient_checkpointing = False
+    _no_split_modules = ["BasicTransformerBlock"]
+
+    @register_to_config
+    def __init__(
+        self,
+        num_attention_heads: int = 8,
+        attention_head_dim: int = 1024 // 8,
+        num_layers: int = 1,
+        dropout: float = 0.0,
+        attention_bias: bool = False,
+        activation_fn: str = "geglu",
+        num_embeds_ada_norm: Optional[int] = None,
+        upcast_attention: bool = False,
+        norm_type: str = "ada_joker_norm_zero",  # 'layer_norm', 'ada_norm', 'ada_norm_zero', 'ada_norm_single', 'ada_norm_continuous', 'layer_norm_i2vgen'
+        norm_elementwise_affine: bool = True,
+        norm_eps: float = 1e-5,
+        attention_type: str = "default",
+        interpolation_scale: float = None,
+        positional_embeddings: str = "sinusoidal",
+        num_positional_embeddings: int = 1000,
+        ff_inner_mult: int = 2,
+        state_dim: int = 1,
+        action_dim: int = 1  
+    ):
+        super().__init__()
+        self.transformer = Transformer1DModel(**self.config)
+        self.embed_state = nn.Linear(self.config.state_dim, self.transformer.inner_dim)
+        self.embed_action = nn.Linear(self.config.action_dim, self.transformer.inner_dim)
+        self.project_state =  nn.Linear(self.transformer.inner_dim, self.config.state_dim)
+        # NOTE, we are not using Fourier positional embeddings, and the 256 thing
+
+    def forward(
+        self,
+        # history_states, # B x 1 x s 
+        # history_actions, # B x 1 x a
+        sample_states: torch.Tensor, # b x H x s 
+        sample_actions: torch.Tensor, # b x H x s 
+        timestep: torch.LongTensor,
+        # attention_mask: Optional[torch.Tensor] = None,
+    ):
+        assert sample_states.shape[1] == sample_actions.shape[1], 'state action mistmatch'
+
+        state_embeds = self.embed_state(sample_states)
+        action_embeds = self.embed_action(sample_actions)
+
+        horizon = sample_states.shape[1]
+        batch_size = sample_states.shape[0]
+
+        combined_embeds  = torch.stack(
+            (state_embeds, action_embeds), dim=1
+        ).permute(0, 2, 1, 3).reshape(batch_size, 2*horizon, self.transformer.inner_dim)
+
+        hidden_embeds = self.transformer(combined_embeds, timestep)
+        hidden_embeds = hidden_embeds.reshape(batch_size, horizon, 2, self.transformer.inner_dim).permute(0, 2, 1, 3)
+        
+        out_state_embeds = hidden_embeds[:, 0]
+        
+        out_states = self.project_state(out_state_embeds)
+        return out_states
+    
+model_type_to_class = {
+    "diffusion_transformer": DiffuserTransformer,
+    "action_transformer": ActionProposalTransformer,
+    "dynamics_transformer": DynamicsTransformer,
+}
