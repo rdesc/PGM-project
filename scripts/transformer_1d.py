@@ -362,12 +362,11 @@ class ActionProposalTransformer(ModelMixin, ConfigMixin):
         state_embed = self.embed_state(initial_state)
         action_embeds = self.embed_action(sample_actions)
 
-        horizon = sample_actions.shape[1]
-        batch_size = sample_actions.shape[0]
+        # horizon = sample_actions.shape[1]
+        # batch_size = sample_actions.shape[0]
 
-        combined_embeds  = torch.stack(
-            (state_embed, action_embeds), dim=1
-        ).permute(0, 2, 1, 3).reshape(batch_size, horizon + 1, self.transformer.inner_dim)
+        combined_embeds  = torch.cat(
+            (state_embed, action_embeds), dim=1)
 
         hidden_embeds = self.transformer(combined_embeds, timestep)
         out_action_embeds = hidden_embeds[:, 1:]        
