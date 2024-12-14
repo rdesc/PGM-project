@@ -263,7 +263,7 @@ class ValueTransformer(ModelMixin, ConfigMixin):
     def forward(self, sample, timestep, return_dict=True):
         if sample.shape[1] == self.config.action_dim + self.config.state_dim: 
             sample = sample.permute(0, 2, 1)
-
+        
         assert sample.shape[2] == self.config.action_dim + self.config.state_dim
 
         sample_actions = sample[:,:, :self.config.action_dim]

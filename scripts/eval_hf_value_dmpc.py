@@ -20,14 +20,13 @@ def generate_samples_dyn(observation, action_samples, model, scheduler, dataset,
     batch_size = config.batch_size
     horizon = config.planning_horizon
     generator = torch.Generator(device=device)
-    state_samples = torch.randn((batch_size, horizon, dataset.observation_dim), device=device, generator=generator).to(device)
+    state_samples = torch.randn((batch_size, horizon, dataset.observation_dim), device=device, generator=generator, dtype=model.dtype).to(device)
     for i, t in enumerate(scheduler.timesteps):
         timesteps = torch.full((batch_size,), t, device=device, dtype=torch.long)
         scaled_state_samples = scheduler.scale_model_input(state_samples, t)
         scaled_state_samples[:, 0] = observation
         with torch.no_grad():
-            state_pred = model(scaled_state_samples, action_samples, timesteps).sample
-
+            state_pred = model(scaled_state_samples, action_samples, timesteps)
         if config.ddim:
             state_samples = scheduler.step(state_pred, t, state_samples, eta=config.eta).prev_sample
         else:
@@ -41,13 +40,12 @@ def generate_samples_act(observation, model, scheduler, dataset, config):
     batch_size = config.batch_size
     horizon = config.planning_horizon
     generator = torch.Generator(device=device)
-    action_samples = torch.randn((batch_size, horizon, dataset.action_dim), device=device, generator=generator).to(device)
+    action_samples = torch.randn((batch_size, horizon, dataset.action_dim), device=device, generator=generator, dtype=model.dtype).to(device)
     for i, t in enumerate(scheduler.timesteps):
         timesteps = torch.full((batch_size,), t, device=device, dtype=torch.long)
         scaled_action_samples = scheduler.scale_model_input(action_samples, t)
         with torch.no_grad():
-            action_pred = model(observation, scaled_action_samples, timesteps).sample
-
+            action_pred = model(observation, scaled_action_samples, timesteps)
         if config.ddim:
             action_samples = scheduler.step(action_pred, t, action_samples, eta=config.eta).prev_sample
         else:
@@ -55,13 +53,13 @@ def generate_samples_act(observation, model, scheduler, dataset, config):
         
     return action_samples
 
-
+@torch.no_grad()
 def pipeline(obs, action_model, dyanmics_model, 
              value_model,scheduler_act, scheduler_dyn, 
              dataset, config):
     # we are ready now
     norm_observation = dataset.normalizer.normalize(obs, 'observations')
-    observation = torch.tensor(norm_observation, device=device)
+    observation = torch.tensor(norm_observation, device=device, dtype=action_model.dtype)
     observation = observation.repeat((config.batch_size, 1))
 
     action_samples = generate_samples_act(observation, action_model, scheduler_act, dataset, config)
@@ -70,10 +68,10 @@ def pipeline(obs, action_model, dyanmics_model,
     
     value_timestep = 0
     timesteps = torch.full((config.batch_size,), value_timestep, device=action_model.device, dtype=torch.long)
-    values = value_model(state_samples, action_samples, timesteps)
+    values = value_model.forward_divided(state_samples, action_samples, timesteps)
     sorted_idx = values.argsort(0, descending=True).squeeze()
     sorted_normed_actions = action_samples[sorted_idx]
-    best_normed_action = sorted_normed_actions[0].cpu().numpy()
+    best_normed_action = sorted_normed_actions[0,0,:].cpu().numpy()
     denorm_action = dataset.normalizer.unnormalize(best_normed_action, 'actions')
     return denorm_action
 
@@ -104,7 +102,6 @@ if __name__ == "__main__":
 
     set_seed(config.seed)
 
-    print("config grad_scale", config.scale)
     env_name = config.env_name
 
     # check if file exists
@@ -126,9 +123,9 @@ if __name__ == "__main__":
 
     # Load action model
     ema_str = "_ema" if config.use_ema else ""
-    model_act_path = os.path.join(config.pretrained_act_model, f"checkpoints/model_{config.checkpoint_diff_model}{ema_str}.pth")
+    model_act_path = os.path.join(config.pretrained_act_model, f"checkpoints/model_{config.checkpoint_act_model}{ema_str}.pth")
     action_model = ActionProposalTransformer.from_pretrained(model_act_path).to(device)
-    model_dyn_path = os.path.join(config.pretrained_dyn_model, f"checkpoints/model_{config.checkpoint_diff_model}{ema_str}.pth")
+    model_dyn_path = os.path.join(config.pretrained_dyn_model, f"checkpoints/model_{config.checkpoint_dyn_model}{ema_str}.pth")
     dyanmics_model = DynamicsTransformer.from_pretrained(model_dyn_path).to(device)
     
     if config.ddim:

@@ -97,3 +97,8 @@ train_hf_action_transformer.py  --train_batch_size=64 --pred_noise --weight_deca
 ## train state dyn
 train_hf_dynamics_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000  --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile
 
+
+
+## eval combo
+python scripts/eval_hf_value_dmpc.py --use-ema --num_inference_steps 20 --file_name_render test_transformer_combos0 --seed 0 --pretrained_value_model runs/hopper-medium-v2/value_1734128084 --checkpoint_value_model=180000 --pretrained_act_model runs/hopper-medium-v2/1734141113 --checkpoint_act_model=799999 --pretrained_dyn_model runs/hopper-medium-v2/1734140811 --checkpoint_dyn_model=799999
+
