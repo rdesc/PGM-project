@@ -87,3 +87,5 @@ add here
 ## eval our transformer
 python scripts/eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 --file_name_render test_transformer_s01 --seed 0 --pretrained_diff_model runs/1734063759 --checkpoint_diff_model 799999
 
+## train value function
+sbatch my_train scripts/train_hf_value.py --arch_type transformer
