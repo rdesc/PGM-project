@@ -155,10 +155,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 loss = F.mse_loss(pred_actions, actions, reduction='none')
             else:
                 loss = F.mse_loss(pred_actions, action_noise, reduction='none')
+            loss_weights = torch.ones_like(actions)
+            loss_weights[:, 0] = config.action_weight
 
             a0_loss = loss[:, 0].mean()
-            loss = loss.mean()
-            accelerator.backward(loss)
+            weighted_loss = (loss * loss_weights).mean()
+            accelerator.backward(weighted_loss)
 
             if config.use_grad_clip:
                 accelerator.clip_grad_norm_(model.parameters(), config.grad_clip_val)
@@ -171,7 +173,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 update_ema(model_ema, model, config.ema_decay)
 
             # progress_bar.update(1)
-            logs = {"loss": loss.detach().item(), "a0_loss": a0_loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
+            logs = {"loss": weighted_loss.detach().item(), "a0_loss": a0_loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
             if config.wandb_track:
                 wandb.log(logs, step=i)
             accelerator.log(logs, step=i)

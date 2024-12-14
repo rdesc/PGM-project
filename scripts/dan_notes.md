@@ -87,3 +87,11 @@ add here
 ## eval our transformer
 python scripts/eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 --file_name_render test_transformer_s01 --seed 0 --pretrained_diff_model runs/1734063759 --checkpoint_diff_model 799999
 
+
+## train action proposal
+train_hf_action_proposal.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000 --action_weight=10 --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile
+
+
+## train state dyn
+train_hf_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000  --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile
+
