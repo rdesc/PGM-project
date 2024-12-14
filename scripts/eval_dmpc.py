@@ -19,26 +19,30 @@ import wandb
 import tyro
 
 
-def generate_samples_eval(config, conditioning ,model, dataset, scheduler, batch_size, horizon):
+def generate_samples(initial_state, actions, model, dataset, scheduler, batch_size, horizon):
     generator = torch.Generator(device=device)
     shape = (batch_size, horizon, dataset.observation_dim + dataset.action_dim,)
     x = torch.randn(shape, device=device, generator=generator).to(device)
+
+    initial_state = initial_state.repeat(batch_size, 1)
+
     for i, t in enumerate(scheduler.timesteps):
         timesteps = torch.full((batch_size,), t, device=device, dtype=torch.long)
         model_input = scheduler.scale_model_input(x, t)
-        if conditioning is not None:
-            model_input[:, 0, dataset.action_dim: ] = conditioning
+        
+        # conditioning
+        model_input[:, 0, dataset.action_dim: ] = initial_state
+        model_input[:, :, :dataset.action_dim] = actions
+
         with torch.no_grad():
             noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
             noise_pred = noise_pred.permute(0, 2, 1) # needed to match model params to original
-        # if config.ddim:
-        #     x = scheduler.step(noise_pred, t, x, eta=config.eta).prev_sample
-        # else:
+
         x = scheduler.step(noise_pred, t, x).prev_sample
     
-    if conditioning is not None:
-        x[:, 0, dataset.action_dim: ] = conditioning
-        
+    x[:, 0, dataset.action_dim: ] = initial_state
+    x[:, :, :dataset.action_dim] = actions
+    
     return x
 
 
@@ -46,13 +50,15 @@ def generate_actions(initial_state, model, dataset, scheduler, batch_size, horiz
     generator = torch.Generator(device=device)
     shape = (batch_size, horizon, dataset.observation_dim + dataset.action_dim,)
     x = torch.randn(shape, device=device, generator=generator).to(device)
+
+    initial_state = initial_state.repeat(horizon, batch_size, 1).permute(1, 0, 2)
     
     for i, t in enumerate(scheduler.timesteps):
         timesteps = torch.full((batch_size,), t, device=device, dtype=torch.long)
         model_input = scheduler.scale_model_input(x, t)
 
         # conditioning
-        model_input[:, :, dataset.action_dim:] = initial_state.unsqueeze(2).repeat(batch_size, 1, horizon).permute(0, 2, 1)
+        model_input[:, :, dataset.action_dim:] = initial_state
 
         with torch.no_grad():
             noise_pred = model(model_input.permute(0, 2, 1), timesteps).sample
@@ -69,7 +75,7 @@ class TrainingConfig:
     """Name of the environment"""
     file_name_render: Optional[str] = None
     batch_size: int = 64  # for sample-score-rank -- the number of samples to generate, selects the best action
-    planning_horizon: int = 32  
+    horizon: int = 32  
     max_episode_length: int = 1000
     # this needs to be <= num_train_timesteps used during training, D-MPC uses 32 diffusion steps for action model and 10 diffusion steps for dynamics model
     # can maybe simplify eval by using the same number of steps for both models (for now)
@@ -112,7 +118,7 @@ if __name__ == "__main__":
         exit()
 
     env_name = config.env_name
-    dataset = ValueDataset(env_name, horizon=config.planning_horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)  # TODO: add config param for discount
+    dataset = ValueDataset(env_name, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)  # TODO: add config param for discount
     env = gym.make(env_name)
     env.seed(config.seed)
     renderer = MuJoCoRenderer(env_name)
@@ -124,10 +130,10 @@ if __name__ == "__main__":
                                                  subfolder="ema" if config.use_ema else "unet", variant=str(config.checkpoint_value_model)).to(device)
 
     print("\nLoading action diffusion model from", config.pretrained_action_model, config.checkpoint_action_model)
-    action_model = UNet1DModel.from_pretrained(os.path.join(config.pretrained_action_model, "checkpoints/model_{}.pth".format(config.checkpoint_action_model)))
+    action_model = UNet1DModel.from_pretrained(os.path.join(config.pretrained_action_model, "checkpoints/model_{}.pth".format(config.checkpoint_action_model))).to(device)
 
     print("\nLoading dynamics diffusion model from", config.pretrained_dynamics_model, config.checkpoint_dynamics_model)
-    dynamics_model = UNet1DModel.from_pretrained(os.path.join(config.pretrained_dynamics_model, "checkpoints/model_{}.pth".format(config.checkpoint_dynamics_model)))
+    dynamics_model = UNet1DModel.from_pretrained(os.path.join(config.pretrained_dynamics_model, "checkpoints/model_{}.pth".format(config.checkpoint_dynamics_model))).to(device)
     
     # NOTE: use same scheduler for both models
     scheduler = DDPMScheduler.from_pretrained(config.pretrained_dynamics_model,
@@ -151,26 +157,15 @@ if __name__ == "__main__":
             for t in tqdm.tqdm(range(config.max_episode_length)):
                 # normalize observation
                 norm_observation = dataset.normalizer.normalize(obs, 'observations')
+
+                initial_state = torch.from_numpy(norm_observation).to(device)
                 
-                # 
-                conditions = torch.tensor(norm_observation, device=device)
-                conditions = conditions.repeat((config.batch_size, 1))
-
-                # 
-                
-                # get actions action model
-
-
-                # get states from dynamics model
-
+                actions = generate_actions(initial_state, action_model, dataset, scheduler, config.batch_size, config.horizon)
+                samples = generate_samples(initial_state, actions, dynamics_model, dataset, scheduler, config.batch_size, config.horizon)
 
                 # sample score and rank
-
-
-                samples = generate_samples_eval(config, conditions, unet, dataset, scheduler, config.batch_size, config.planning_horizon)
-
                 # get values of samples
-                timesteps = torch.full((config.batch_size,), 0, device=unet.device, dtype=torch.long)
+                timesteps = torch.full((config.batch_size,), 0, device=device, dtype=torch.long)
                 values = value_function(samples.permute(0, 2, 1), timesteps).sample
                 sorted_idx = values.argsort(0, descending=True).squeeze()
                 sorted_samples = samples[sorted_idx]
@@ -209,7 +204,4 @@ if __name__ == "__main__":
 
 # TODO: better way of saving results
 # TODO: better directory structure for saving results
-
 # TODO: can we store the results to wandb?
-
-# can we still use our value function?
