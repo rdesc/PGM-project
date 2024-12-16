@@ -159,14 +159,6 @@ if __name__ == "__main__":
     set_seed(config.seed)
     run_id = int(time.time())
     config.output_dir = f"runs/{config.env_id}/{config.model_type}_{run_id}"
-
-    if config.wandb_track:
-        wandb.init(
-            config=config,
-            name=config.output_dir,
-            project="diffusion_training",
-            entity="pgm-diffusion"
-        )
         
     print("Discount factor:", config.discount_factor)
     dataset = ValueDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=config.discount_factor, seed=config.seed)
@@ -175,9 +167,13 @@ if __name__ == "__main__":
     assert config.arch_type in ['unet', 'transformer'], "Only unet and transformer are supported"
     
     if config.arch_type == 'unet':
-        value_network_config = UNet1DModel.load_config(config.model_config_path, subfolder="value_function")
-        print(value_network_config)
-        value_network = UNet1DModel.from_config(value_network_config)
+        net_args = {"in_channels": dataset.action_dim + dataset.observation_dim, 
+                         "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], "up_block_types": [], 
+                         "out_block_type": "ValueFunction", "mid_block_type": "Valu`eFunctionMidBlock1D", "block_out_channels": [32, 64, 128, 256], 
+                         "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, "out_channels": dataset.action_dim + dataset.observation_dim, 
+                         "extra_in_channels": 0, "time_embedding_type": "positional", "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, 
+                         "norm_num_groups": 8, "act_fn": "mish", "mid_block_layers": 1}
+        value_network = UNet1DModel.from_config(**net_args)
     else:
         nheads = config.nheads
         hidden_dim = config.hidden_dim
@@ -212,16 +208,19 @@ if __name__ == "__main__":
         value_network = torch.compile(value_network)
 
     # create the schulduler 
-    scheduler_config = DDPMScheduler.load_config(config.model_config_path, subfolder="scheduler")
-    # below are kwargs to overwrite the config loaded from HF
-    scheduler_config["num_train_timesteps"] = config.num_train_timesteps
-
-    scheduler = DDPMScheduler.from_config(scheduler_config)
+    scheduler = DDPMScheduler(
+        num_train_timesteps=config.num_train_timesteps,
+        beta_schedule="squaredcos_cap_v2", 
+        clip_sample=False, 
+        variance_type="fixed_small_log",
+        prediction_type="sample" if not config.pred_noise else "epsilon",
+    )
+    
     optimizer = torch.optim.Adam(value_network.parameters(), lr=config.learning_rate)
 
     if config.wandb_track:
         wandb.config["model_config"] = value_network_config
-        wandb.config["scheduler_config"] = scheduler_config
+        wandb.config["scheduler_config"] = scheduler.config
         wandb.config["optimizer"] = optimizer.__class__.__name__
 
 
@@ -232,5 +231,14 @@ if __name__ == "__main__":
     )
     renderer = MuJoCoRenderer(config.env_id)
     args = (config, value_network, scheduler, optimizer, train_dataloader, lr_scheduler, renderer)
+
+    if config.wandb_track:
+        wandb.init(
+            config=config,
+            name=config.output_dir,
+            project="diffusion_training",
+            entity="pgm-diffusion"
+        )
+
 
     train_loop(*args)
