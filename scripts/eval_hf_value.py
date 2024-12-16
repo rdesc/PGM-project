@@ -1,5 +1,6 @@
 import os 
 import json
+import time
 from dataclasses import dataclass, asdict
 from typing import Optional
 
@@ -16,13 +17,17 @@ from diffusers import  UNet1DModel, DDPMScheduler, DDPMPipeline
 from transformer_1d import DiffuserTransformer, DiffuserTransformerPolicy
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.utils import set_seed
+from diffuser.datasets import ValueDataset
+
 from bc_d4rl import show_sample
 import tyro
-from diffuser.datasets import ValueDataset
+import wandb
+
 
 MAPPING_DICT = {
     DiffuserTransformer: DiffuserTransformerPolicy,
 }
+
 
 @dataclass
 class TrainingConfig:
@@ -45,14 +50,28 @@ class TrainingConfig:
     use_ema: bool = True
     torch_compile: bool = True
     seed: int = 0
+    wandb_track: bool = True
+    render: bool = True
 
 
 if __name__ == "__main__":
+    device = "cpu" if not torch.cuda.is_available() else "cuda"
     config = tyro.cli(TrainingConfig)
+    run_id = int(time.time())
+
+
+    if config.wandb_track:
+        wandb.init(
+            config=config,
+            name=str(run_id),
+            project="diffusion_testing",
+            entity="pgm-diffusion"
+        )
 
     set_seed(config.seed)
 
-    print("config grad_scale", config.scale)
+
+    print("Config:", config)
     env_name = config.env_name
 
     # check if file exists
@@ -63,10 +82,11 @@ if __name__ == "__main__":
 
     dataset = ValueDataset(env_name, horizon=config.planning_horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)
     env = dataset.env
-    # env.seed(config.seed)
-    renderer = MuJoCoRenderer(env_name)
+    env.seed(config.seed)
 
-    device = "cpu" if not torch.cuda.is_available() else "cuda"
+    if config.render:
+        renderer = MuJoCoRenderer(env_name)
+
 
     if not config.pretrained_value_model is None:
         print("Loading value model from ", config.pretrained_value_model, config.checkpoint_value_model, "use-ema:", config.use_ema)
@@ -84,8 +104,7 @@ if __name__ == "__main__":
             model_diff_path = os.path.join(config.pretrained_diff_model, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model))
 
         print("Loading diffusion model from ", model_diff_path)
-        #
-        # load config in model_diff_path/config.json
+
         with open(os.path.join(model_diff_path, "config.json"), "rb") as f:
             model_config = json.load(f)
 
@@ -98,20 +117,12 @@ if __name__ == "__main__":
         if class_name in MAPPING_DICT:
             print("Mapping class")
             diffusion_model = MAPPING_DICT[class_name](diffusion_model)
-        # import pdb; pdb.set_trace()
-        # if type(class_name) == DiffuserTransformer:
-        #     diffusion_model = DiffuserTransformerPolicy(diffusion_model)
         
-        scheduler = DDPMScheduler.from_pretrained(config.pretrained_diff_model,
-                                                  # below are kwargs to overwrite the config loaded from the pretrained model
-                                                  )
-        # print(scheduler.config)
+        scheduler = DDPMScheduler.from_pretrained(config.pretrained_diff_model)
     else:
         print("Loading diffusion model from ", config.hf_repo)
         diffusion_model = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet", use_safe_tensors=False)
-        scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler",
-                                                  # below are kwargs to overwrite the config loaded from the pretrained model
-                                                  )
+        scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler")
     scheduler.set_timesteps(config.num_inference_steps)
     print("num train timesteps", scheduler.num_train_timesteps, "num inference timesteps", scheduler.num_inference_steps)
 
@@ -120,6 +131,8 @@ if __name__ == "__main__":
         diffusion_model = torch.compile(diffusion_model)
         
     pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=diffusion_model, scheduler=scheduler, env=env).to(device)
+
+
 
     obs = env.reset()
     total_reward = 0
@@ -139,23 +152,26 @@ if __name__ == "__main__":
             next_observation, reward, terminal, _ = env.step(denorm_actions)
             # update return
             total_reward += reward
-            # compute score
-            score = env.get_normalized_score(total_reward)
 
-            print(
-                f"Step: {t}, Reward: {reward}, Total Reward: {total_reward}, Score: {score}"
-            )
-
+            # print(
+            #     f"Step: {t}, Reward: {reward}, Total Reward: {total_reward}, Score: {score}"
+            # )
             # save observations for rendering
             rollout.append(next_observation.copy())
 
             obs = next_observation
 
-            # if terminal:
-            #     show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
-            #     renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])  
-            #     break
-            if (t+1) % config.render_steps == 0: 
+            if terminal:
+                # compute score
+                score = env.get_normalized_score(total_reward)
+
+                logs = {"score": score, "total_reward":total_reward}
+                wandb.log(logs)
+                if config.render:
+                    show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
+                    renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])  
+                break
+            if config.render and (t+1) % config.render_steps == 0: 
                 show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
                 renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
 
