@@ -167,13 +167,13 @@ if __name__ == "__main__":
     assert config.arch_type in ['unet', 'transformer'], "Only unet and transformer are supported"
     
     if config.arch_type == 'unet':
-        net_args = {"in_channels": dataset.action_dim + dataset.observation_dim, 
+        value_network_config = {"in_channels": dataset.action_dim + dataset.observation_dim, 
                          "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], "up_block_types": [], 
                          "out_block_type": "ValueFunction", "mid_block_type": "ValueFunctionMidBlock1D", "block_out_channels": [32, 64, 128, 256], 
                          "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, "out_channels": dataset.action_dim + dataset.observation_dim, 
                          "extra_in_channels": 0, "time_embedding_type": "positional", "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, 
                          "norm_num_groups": 8, "act_fn": "mish"}
-        value_network = UNet1DModel(**net_args)
+        value_network = UNet1DModel(**value_network_config)
     else:
         nheads = config.nheads
         hidden_dim = config.hidden_dim
