@@ -29,6 +29,25 @@ MAPPING_DICT = {
 }
 
 
+def load_config(config_path):
+    with open(config_path, "rb") as f:
+        model_config = json.load(f)
+    return model_config
+
+def load_model(model_config):
+    class_str = model_config["_class_name"]
+    class_name = eval(class_str)
+    variant = model_config["variant"] if "variant" in model_config.keys() else None
+
+    model = class_name.from_pretrained(model_config["model_path"], variant=variant).to(device)
+
+    if class_name in MAPPING_DICT:
+        model = MAPPING_DICT[class_name](model)
+        
+    return model
+
+
+
 @dataclass
 class TrainingConfig:
     env_name: str = "hopper-medium-v2"
@@ -60,7 +79,7 @@ if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
     run_id = int(time.time())
 
-    set_seed(config.seed)
+    # set_seed(config.seed)
 
 
     print("Config:", config)
@@ -81,40 +100,39 @@ if __name__ == "__main__":
 
 
     if not config.pretrained_value_model is None:
-        print("Loading value model from ", config.pretrained_value_model, config.checkpoint_value_model, "use-ema:", config.use_ema)
-        value_function = UNet1DModel.from_pretrained(config.pretrained_value_model, use_safe_tensors=True, 
-                                                 subfolder="ema" if config.use_ema else "unet", variant=str(config.checkpoint_value_model)).to(device)
+        ema_str = "ema" if config.use_ema else "unet"
+        model_value_path = os.path.join(config.pretrained_value_model, ema_str)
+        print("Loading value model from", model_value_path)
+
+        model_config = load_config(os.path.join(model_value_path, "config.json"))
+        model_config["model_path"] = model_value_path
+        model_config["variant"] = str(config.checkpoint_value_model)
+        
+        value_function = load_model(model_config)
+        
 
     else:
         print("Loading value function from ", config.hf_repo)
         value_function = UNet1DModel.from_pretrained(config.hf_repo, subfolder="value_function", use_safe_tensors=False)
 
     if not config.pretrained_diff_model is None:
-        if config.use_ema:
-            model_diff_path = os.path.join(config.pretrained_diff_model, "checkpoints/model_{}_ema.pth".format(config.checkpoint_diff_model))
-        else:
-            model_diff_path = os.path.join(config.pretrained_diff_model, "checkpoints/model_{}.pth".format(config.checkpoint_diff_model))
+        ema_str = "_ema" if config.use_ema else ""
+        model_diff_path = os.path.join(config.pretrained_diff_model, f"checkpoints/model_{config.checkpoint_diff_model}{ema_str}.pth")
 
-        print("Loading diffusion model from ", model_diff_path)
+        print("Loading diffusion model from", model_diff_path)
 
-        with open(os.path.join(model_diff_path, "config.json"), "rb") as f:
-            model_config = json.load(f)
+        model_config = load_config(os.path.join(model_diff_path, "config.json"))
+        model_config["model_path"] = model_diff_path
 
-        class_str = model_config["_class_name"]
-        class_name = eval(class_str)
-        print(class_name)
-        # diffusion_model = UNet1DModel.from_pretrained(model_diff_path)
-        diffusion_model = class_name.from_pretrained(model_diff_path).to(device)
-        
-        if class_name in MAPPING_DICT:
-            print("Mapping class")
-            diffusion_model = MAPPING_DICT[class_name](diffusion_model)
-        
+        diffusion_model = load_model(model_config)
+
         scheduler = DDPMScheduler.from_pretrained(config.pretrained_diff_model)
     else:
         print("Loading diffusion model from ", config.hf_repo)
         diffusion_model = UNet1DModel.from_pretrained(config.hf_repo, subfolder="unet", use_safe_tensors=False)
         scheduler = DDPMScheduler.from_pretrained(config.hf_repo, subfolder="scheduler")
+    
+    
     scheduler.set_timesteps(config.num_inference_steps)
     print("num train timesteps", scheduler.num_train_timesteps, "num inference timesteps", scheduler.num_inference_steps)
 
@@ -124,8 +142,10 @@ if __name__ == "__main__":
         
     pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=diffusion_model, scheduler=scheduler, env=env).to(device)
 
+
     config.model_type = 'diffuser'
-    config.model_arch = class_str
+    config.arch_type = model_config["_class_name"]
+
     if config.wandb_track:
         wandb.init(
             config=config,
@@ -165,10 +185,6 @@ if __name__ == "__main__":
             next_observation, reward, terminal, _ = env.step(denorm_actions)
             # update return
             total_reward += reward
-
-            # print(
-            #     f"Step: {t}, Reward: {reward}, Total Reward: {total_reward}, Score: {score}"
-            # )
             # save observations for rendering
             rollout.append(next_observation.copy())
 
@@ -190,7 +206,6 @@ if __name__ == "__main__":
         print(f"Total reward: {total_reward}, Score: {env.get_normalized_score(total_reward)}")
         if config.wandb_track:
             logs = {"score": normalized_score, "total_reward":total_reward, 'seed': seed}
-            import pdb; pdb.set_trace()
             if image is not None:
                 logs['image'] = wandb.Image(image, caption=f"composite {seed}", file_type="png")
             wandb.log(logs)
