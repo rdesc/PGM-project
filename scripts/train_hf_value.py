@@ -169,11 +169,11 @@ if __name__ == "__main__":
     if config.arch_type == 'unet':
         net_args = {"in_channels": dataset.action_dim + dataset.observation_dim, 
                          "down_block_types": ["DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"], "up_block_types": [], 
-                         "out_block_type": "ValueFunction", "mid_block_type": "Valu`eFunctionMidBlock1D", "block_out_channels": [32, 64, 128, 256], 
+                         "out_block_type": "ValueFunction", "mid_block_type": "ValueFunctionMidBlock1D", "block_out_channels": [32, 64, 128, 256], 
                          "layers_per_block": 1, "downsample_each_block": True, "sample_size": 65536, "out_channels": dataset.action_dim + dataset.observation_dim, 
                          "extra_in_channels": 0, "time_embedding_type": "positional", "use_timestep_embedding": True, "flip_sin_to_cos": False, "freq_shift": 1, 
-                         "norm_num_groups": 8, "act_fn": "mish", "mid_block_layers": 1}
-        value_network = UNet1DModel.from_config(**net_args)
+                         "norm_num_groups": 8, "act_fn": "mish"}
+        value_network = UNet1DModel(**net_args)
     else:
         nheads = config.nheads
         hidden_dim = config.hidden_dim
@@ -213,16 +213,12 @@ if __name__ == "__main__":
         beta_schedule="squaredcos_cap_v2", 
         clip_sample=False, 
         variance_type="fixed_small_log",
-        prediction_type="sample" if not config.pred_noise else "epsilon",
+        prediction_type="sample",
     )
     
     optimizer = torch.optim.Adam(value_network.parameters(), lr=config.learning_rate)
 
-    if config.wandb_track:
-        wandb.config["model_config"] = value_network_config
-        wandb.config["scheduler_config"] = scheduler.config
-        wandb.config["optimizer"] = optimizer.__class__.__name__
-
+    
 
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer=optimizer,
@@ -239,6 +235,12 @@ if __name__ == "__main__":
             project="diffusion_training",
             entity="pgm-diffusion"
         )
+        wandb.config["model_config"] = value_network_config
+        wandb.config["scheduler_config"] = scheduler.config
+        wandb.config["optimizer"] = optimizer.__class__.__name__
+
+
+    
 
 
     train_loop(*args)
