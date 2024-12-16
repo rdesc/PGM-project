@@ -60,15 +60,6 @@ if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
     run_id = int(time.time())
 
-
-    if config.wandb_track:
-        wandb.init(
-            config=config,
-            name=str(run_id),
-            project="diffusion_testing",
-            entity="pgm-diffusion"
-        )
-
     set_seed(config.seed)
 
 
@@ -133,6 +124,15 @@ if __name__ == "__main__":
         
     pipeline = ValueGuidedRLPipeline(value_function=value_function, unet=diffusion_model, scheduler=scheduler, env=env).to(device)
 
+    config['model_type'] = 'diffuser'
+    config['model_arch'] = class_str
+    if config.wandb_track:
+        wandb.init(
+            config=config,
+            name=str(run_id),
+            project="diffusion_testing",
+            entity="pgm-diffusion"
+        )
 
 
     ep_returns = []
