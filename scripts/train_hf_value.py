@@ -158,7 +158,7 @@ if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
     set_seed(config.seed)
     run_id = int(time.time())
-    config.output_dir = f"runs/{config.model_type}_{run_id}"
+    config.output_dir = f"runs/{config.env_id}/{config.model_type}_{run_id}"
 
     if config.wandb_track:
         wandb.init(
@@ -211,7 +211,6 @@ if __name__ == "__main__":
     if config.torch_compile:
         value_network = torch.compile(value_network)
 
-    # create the schulduler 
     # create the schulduler 
     scheduler_config = DDPMScheduler.load_config(config.model_config_path, subfolder="scheduler")
     # below are kwargs to overwrite the config loaded from HF
