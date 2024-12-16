@@ -190,7 +190,6 @@ if __name__ == "__main__":
         print(f"Total reward: {total_reward}, Score: {env.get_normalized_score(total_reward)}")
         if config.wandb_track:
             logs = {"score": normalized_score, "total_reward":total_reward, 'seed': seed}
-            import pdb; pdb.set_trace()
             if image is not None:
                 logs['image'] = wandb.Image(image, caption=f"composite {seed}", file_type="png")
             wandb.log(logs)
