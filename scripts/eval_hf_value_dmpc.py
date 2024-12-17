@@ -1,5 +1,7 @@
 import os 
 import json
+import wandb
+import time
 from dataclasses import dataclass, asdict
 from typing import Optional
 
@@ -95,10 +97,14 @@ class TrainingConfig:
     torch_compile: bool = True
     seed: int = 0
     ddim: bool = False
+    n_episodes: int = 1
+    render: bool = True
+    wandb_track: bool = True
 
 
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
+    run_id = int(time.time())
 
     set_seed(config.seed)
 
@@ -143,17 +149,36 @@ if __name__ == "__main__":
         value_model = torch.compile(value_model)
         action_model = torch.compile(action_model)
         dyanmics_model = torch.compile(dyanmics_model)
-        
+    
+    config.model_type = 'dmpc'
+    config.arch_type = 'transformer'
+
+    if config.wandb_track:
+        wandb.init(
+            config=config,
+            name=str(run_id),
+            project="diffusion_testing",
+            entity="pgm-diffusion"
+        )
 
 
+    ep_returns = []
+    ep_scores = []
 
+    if config.n_episodes > 1:
+        seeds = np.arange(config.n_episodes, dtype=int)
+    else:
+        seeds = [config.seed]
+    
+    for seed in seeds:
+        set_seed(int(seed))
+        env.seed(int(seed))
+        obs = env.reset()
+        total_reward = 0
+        total_score = 0
+        rollout = [obs.copy()]
 
-    obs = env.reset()
-    total_reward = 0
-    total_score = 0
-    rollout = [obs.copy()]
-
-    try:
+        image = None
         for t in tqdm.tqdm(range(config.max_episode_length)):
             # call the policy
             denorm_actions = pipeline(
@@ -179,15 +204,27 @@ if __name__ == "__main__":
 
             obs = next_observation
 
-            # if terminal:
-            #     show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
-            #     renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])  
-            #     break
-            if (t+1) % config.render_steps == 0: 
+            if terminal:
+                if config.render:
+                    show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
+                    image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])  
+                break
+            if config.render and (t+1) % config.render_steps == 0: 
                 show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
-                renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
+                image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
 
-    except KeyboardInterrupt:
-        pass
+        normalized_score = env.get_normalized_score(total_reward)
+        ep_returns.append(total_reward)
+        ep_scores.append(normalized_score)
 
-    print(f"Total reward: {total_reward}, Score: {env.get_normalized_score(total_reward)}")
+        print(f"Total reward: {total_reward}, Score: {env.get_normalized_score(total_reward)}")
+        if config.wandb_track:
+            logs = {"score": normalized_score, "total_reward":total_reward, 'seed': seed}
+            if image is not None:
+                logs['image'] = wandb.Image(image, caption=f"composite {seed}", file_type="png")
+            wandb.log(logs)
+    if config.wandb_track:
+        wandb.summary["avg_return"] = np.mean(ep_returns)
+        wandb.summary["avg_return"] = np.std(ep_returns)
+        wandb.summary["avg_score"] = np.mean(ep_scores)
+        wandb.summary["std_score"] = np.std(ep_scores) 
