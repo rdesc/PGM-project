@@ -14,7 +14,7 @@ import tqdm
 # from diffusers.experimental import ValueGuidedRLPipeline
 from value_guided_sampling import ValueGuidedRLPipeline
 from diffusers import  UNet1DModel, DDPMScheduler, DDPMPipeline
-from transformer_1d import DiffuserTransformer, DiffuserTransformerPolicy
+from transformer_1d import DiffuserTransformer, DiffuserTransformerPolicy, ValueTransformer
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.utils import set_seed
 from diffuser.datasets import ValueDataset
@@ -50,7 +50,7 @@ def load_model(model_config):
 
 @dataclass
 class TrainingConfig:
-    env_name: str = "hopper-medium-v2"
+    env_id: str = "hopper-medium-v2"
     """Name of the environment"""
     file_name_render: Optional[str] = None
     batch_size: int = 64  # the number of samples to generate, selects the best action
@@ -83,7 +83,7 @@ if __name__ == "__main__":
 
 
     print("Config:", config)
-    env_name = config.env_name
+    env_id = config.env_id
 
     # check if file exists
     file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_value_model or config.hf_repo) + "_render"
@@ -91,12 +91,12 @@ if __name__ == "__main__":
         print(f"File {file_name_render} already exists. Exiting.")
         exit()
 
-    dataset = ValueDataset(env_name, horizon=config.planning_horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)
+    dataset = ValueDataset(env_id, horizon=config.planning_horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)
     env = dataset.env
     env.seed(config.seed)
 
     if config.render:
-        renderer = MuJoCoRenderer(env_name)
+        renderer = MuJoCoRenderer(env_id)
 
 
     if not config.pretrained_value_model is None:
