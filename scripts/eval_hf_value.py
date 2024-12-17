@@ -211,6 +211,6 @@ if __name__ == "__main__":
             wandb.log(logs)
     if config.wandb_track:
         wandb.summary["avg_return"] = np.mean(ep_returns)
-        wandb.summary["avg_return"] = np.std(ep_returns)
+        wandb.summary["std_return"] = np.std(ep_returns)
         wandb.summary["avg_score"] = np.mean(ep_scores)
         wandb.summary["std_score"] = np.std(ep_scores) 
