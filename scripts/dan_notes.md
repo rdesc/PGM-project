@@ -135,3 +135,19 @@ python scripts/train_hf_value.py --train_batch_size 64 --gradient_accumulation_s
 python3 eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 --file_name_render test_transformer_s01 --pretrained_diff_model runs/hopper-medium-v2/1734063759 --checkpoint_diff_model 799999 --render_steps 1000 --n_episodes 2
 
 
+# D-MPC Unet training
+
+## dynamics model training for D-MPC UNet
+python scripts/train_hf_dynamics_unet.py --env_id hopper-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --seed 0 --history 0 --n_train_steps 1000000 --checkpointing_freq 100000
+python scripts/train_hf_dynamics_unet.py --env_id walker2d-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --seed 0 --history 0 --n_train_steps 1000000 --checkpointing_freq 100000
+python scripts/train_hf_dynamics_unet.py --env_id halfcheetah-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --seed 0 --history 0 --n_train_steps 1000000 --checkpointing_freq 100000
+
+## action model training for D-MPC UNet 
+python scripts/train_hf_action_unet.py --env_id hopper-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --seed 0 --history 0 --n_train_steps 1000000 --checkpointing_freq 100000 --render_freq 0
+python scripts/train_hf_action_unet.py --env_id walker2d-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --seed 0 --history 0 --n_train_steps 1000000 --checkpointing_freq 100000 --render_freq 0
+python scripts/train_hf_action_unet.py --env_id halfcheetah-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --seed 0 --history 0 --n_train_steps 1000000 --checkpointing_freq 100000 --render_freq 0
+
+## value function training for original Diffuser
+python scripts/train_hf_value.py --env_id hopper-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --arch_type unet --seed 0
+python scripts/train_hf_value.py --env_id walker2d-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --arch_type unet --seed 0
+python scripts/train_hf_value.py --env_id halfcheetah-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --arch_type unet --seed 0
