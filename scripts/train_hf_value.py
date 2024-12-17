@@ -54,7 +54,6 @@ class TrainingConfig:
     wandb_track: bool = True
     model_type: str = "value"
     arch_type: str = "unet"
-    model_config_path: str = "bglick13/hopper-medium-v2-value-function-hor32"
     nheads: int = 4
     hidden_dim: int = 256
     num_layers: int = 5
@@ -231,7 +230,7 @@ if __name__ == "__main__":
     if config.wandb_track:
         wandb.init(
             config=config,
-            name=config.output_dir,
+            name=run_id,
             project="diffusion_training",
             entity="pgm-diffusion"
         )
