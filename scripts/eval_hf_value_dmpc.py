@@ -212,10 +212,12 @@ if __name__ == "__main__":
             if config.render and (t+1) % config.render_steps == 0: 
                 show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
                 image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
-
         normalized_score = env.get_normalized_score(total_reward)
         ep_returns.append(total_reward)
         ep_scores.append(normalized_score)
+
+        if image is None and config.render:
+            image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
 
         print(f"Total reward: {total_reward}, Score: {env.get_normalized_score(total_reward)}")
         if config.wandb_track:
