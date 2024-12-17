@@ -89,19 +89,49 @@ python scripts/eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 -
 
 ## train value function
 sbatch my_train scripts/train_hf_value.py --arch_type transformer
+sbatch my_train scripts/train_hf_value.py --arch_type transformer --env_id halfcheetah-medium-v2
+sbatch my_train scripts/train_hf_value.py --arch_type transformer --env_id walker2d-medium-v2
 
 ## train action proposal
-train_hf_action_transformer.py  --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000 --action_weight=10 --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile
+train_hf_action_transformer.py  --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000 --action_weight=10 --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile 
+
+scripts/train_hf_action_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000 --action_weight=10 --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile --env_id halfcheetah-medium-v2
+scripts/train_hf_action_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000 --action_weight=10 --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile --env_id walker2d-medium-v2
 
 
 ## train state dyn
 train_hf_dynamics_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000  --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile
+train_hf_dynamics_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000  --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile --env_id halfcheetah-medium-v2
+
+train_hf_dynamics_transformer.py --train_batch_size=64 --pred_noise --weight_decay=0.0 --horizon=32 --n_train_steps=1000000 --checkpointing_freq=100000 --render_freq=100000  --cosine_warmup --learning_rate=0.0002 --mixed_precision=fp16 --num_train_timesteps=20 --torch_compile --env_id walker2d-medium-v2
 
 
 
 ## eval combo
-python scripts/eval_hf_value_dmpc.py --use-ema --num_inference_steps 20 --file_name_render test_transformer_combos0 --seed 0 --pretrained_value_model runs/hopper-medium-v2/value_1734128084 --checkpoint_value_model=180000 --pretrained_act_model runs/hopper-medium-v2/1734141113 --checkpoint_act_model=799999 --pretrained_dyn_model runs/hopper-medium-v2/1734140811 --checkpoint_dyn_model=799999
+hopper
+python scripts/eval_hf_value_dmpc.py --use-ema --num_inference_steps 20 --file_name_render test_transformer_combos0 --seed 0 --pretrained_value_model runs/hopper-medium-v2/value_1734128084 --checkpoint_value_model=180000 --pretrained_act_model runs/hopper-medium-v2/1734141113 --checkpoint_act_model=799999 --pretrained_dyn_model runs/hopper-medium-v2/1734140811 --checkpoint_dyn_model=799999 --n_episodes=5 --render_steps=2000
+
+walker2d
+hopper
+python scripts/eval_hf_value_dmpc.py --env_name walker2d-medium-v2  --use-ema --num_inference_steps 20 --file_name_render test_transformer_combos0 --seed 0 --pretrained_value_model runs/walker2d-medium-v2/value_1734398105 --checkpoint_value_model=180000 --pretrained_act_model runs/walker2d-medium-v2/1734402336 --checkpoint_act_model=799999 --pretrained_dyn_model runs/walker2d-medium-v2/1734404160 --checkpoint_dyn_model=799999 --n_episodes=5 --render_steps=2000
+
+cheetah
+python scripts/eval_hf_value_dmpc.py --env_name halfcheetah-medium-v2 --use-ema --num_inference_steps 20 --file_name_render test_transformer_combos0 --seed 0 --pretrained_value_model runs/halfcheetah-medium-v2/value_1734390656 --checkpoint_value_model=180000 --pretrained_act_model runs/halfcheetah-medium-v2/1734401044 --checkpoint_act_model=799999 --pretrained_dyn_model runs/halfcheetah-medium-v2/1734407834 --checkpoint_dyn_model=799999 --n_episodes=5 --render_steps=2000
+
+
+
+
+## eval with discount 0.997
+python scripts/eval_hf_value_dmpc.py --use-ema --num_inference_steps 20 --file_name_render test_transformer_combos0 --seed 0 --pretrained_value_model runs/hopper-medium-v2/value_1734128018 --checkpoint_value_model=180000 --pretrained_act_model runs/hopper-medium-v2/1734141113 --checkpoint_act_model=799999 --pretrained_dyn_model runs/hopper-medium-v2/1734140811 --checkpoint_dyn_model=799999
+
 
 
 ## train hf value
 python scripts/train_hf_value.py --train_batch_size 64 --gradient_accumulation_steps 1 --use-ema --discount_factor 0.997 --num_train_timesteps 20 --seed 42
+
+
+
+## eval_hf_value w/ wandb logging, would need to add value
+python3 eval_hf_value.py --use-ema --scale 0.1 --num_inference_steps 20 --file_name_render test_transformer_s01 --pretrained_diff_model runs/hopper-medium-v2/1734063759 --checkpoint_diff_model 799999 --render_steps 1000 --n_episodes 2
+
+
