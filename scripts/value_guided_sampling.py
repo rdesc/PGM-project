@@ -130,7 +130,7 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
             # apply conditions to the trajectory (set the initial state)
             x = self.reset_x0(x, conditions, self.action_dim)
             x = self.to_torch(x)
-        return x, y
+        return x
 
     def __call__(self, obs, batch_size=64, planning_horizon=32, n_guide_steps=2, scale=0.1):
         # normalize the observations and create  batch dimension
@@ -146,7 +146,10 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
         x = self.to_torch(x)
 
         # run the diffusion process
-        x, y = self.run_diffusion(x, conditions, n_guide_steps, scale)
+        x = self.run_diffusion(x, conditions, n_guide_steps, scale)
+        timesteps = torch.full((batch_size,), 0, device=self.unet.device, dtype=torch.long)
+
+        y = self.value_function(x.permute(0, 2, 1), timesteps).sample
 
         # sort output trajectories by value
         sorted_idx = y.argsort(0, descending=True).squeeze()
