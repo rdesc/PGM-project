@@ -264,11 +264,11 @@ if __name__ == "__main__":
     # global_step = 0
     run_id = int(time.time())
     save_path = f"runs/{config.env_id}/{run_id}"
-    os.makedirs(save_path, exist_ok=True)
     while os.path.exists(save_path):
         run_id = int(time.time())
         save_path = f"runs/{config.env_id}/{run_id}"
-
+    os.makedirs(save_path, exist_ok=True)
+    config.output_dir = save_path
 
     args = (config, network, scheduler, optimizer, train_dataloader, lr_scheduler, renderer, save_path)
     
