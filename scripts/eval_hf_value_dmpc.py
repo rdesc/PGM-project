@@ -108,7 +108,7 @@ if __name__ == "__main__":
 
     set_seed(config.seed)
 
-    env_id = config.env_id
+    env_id = config.env_name
 
     # check if file exists
     file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_value_model or config.hf_repo) + "_render"
