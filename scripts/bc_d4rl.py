@@ -1,66 +1,38 @@
+import time
 import random
 import os
+from dataclasses import dataclass
+from typing import Optional
+
 import numpy as np
 import gym
-
 import torch
 import torch.nn as nn
 from safetensors.torch import save_file, load
 import torch.optim as optim
 import torch.nn.functional as F
-
-from torch.utils.data import DataLoader, Dataset
-
-from tqdm import tqdm
+import tqdm
 import mediapy as media
-from diffuser.utils.rendering import MuJoCoRenderer
-
 import d4rl
+import tyro
+import wandb
 
-def normalize(inp, mean, std):
-    return (inp - mean) / std
-
-def de_normalize(inp, mean, std):
-    return inp * std + mean
-
-class RLDataset(Dataset):
-    def __init__(self, data_dict, normalize_obs=False, normalize_actions=False):
-        self.data_dict = data_dict
-        actions = torch.from_numpy(data_dict["actions"]).float()
-        obs = torch.from_numpy(data_dict["observations"]).float()
-
-        obs_mean = obs.mean(axis=0)
-        obs_std = obs.std(axis=0)
-
-        actions_mean = actions.mean(axis=0)
-        actions_std = actions.std(axis=0)
-
-        if normalize_obs:
-            obs = normalize(obs, obs_mean, obs_std)
-
-        if normalize_actions:
-            actions = normalize(actions, actions_mean, actions_std)
-
-        self.obs_mean = obs_mean
-        self.obs_std = obs_std
-        self.actions_mean = actions_mean
-        self.actions_std = actions_std
-
-        self.obs = obs
-        self.actions = actions
-
-        self.device = device
-
-    def __len__(self):
-        return len(self.obs)
-
-    def __getitem__(self, idx):
-        return self.obs[idx], self.actions[idx]
+from diffuser.utils.rendering import MuJoCoRenderer
+from diffuser.utils import set_seed
+from diffuser.datasets import SequenceDataset
 
 
-class HopperNet(nn.Module):
+def cycle(dl):
+    while True:
+        for data in dl:
+            yield data
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+class Network(nn.Module):
     def __init__(self, obs_dim, act_dim):
-        super(HopperNet, self).__init__()
+        super(Network, self).__init__()
 
         self.net = nn.Sequential(
             nn.Linear(obs_dim, 256),
@@ -73,30 +45,18 @@ class HopperNet(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(256, act_dim),
-            nn.Tanh()
         ) 
 
     def forward(self, obs):
         return self.net(obs)
-    
 
-def mkdir(savepath):
-    """
-        returns `True` iff `savepath` is created
-    """
-    if not os.path.exists(savepath):
-        os.makedirs(savepath)
-        return True
-    else:
-        return False
-    
 
 def show_sample(renderer, observations, filename='sample.mp4', savebase='./'):
     '''
     observations : [ batch_size x horizon x observation_dim ]
     '''
 
-    mkdir(savebase)
+    os.makedirs(savebase, exist_ok=True)
     savepath = os.path.join(savebase, filename)
 
     images = []
@@ -112,114 +72,183 @@ def show_sample(renderer, observations, filename='sample.mp4', savebase='./'):
     print('Saved video to', savepath)
 
 
-def evaluate(env, actor, T=1000, render=False, filename='bc_sample.mp4', de_normalize_actions=False):
-    cum_reward = 0
-    obs = env.reset()
-    rollout = [obs.copy()]
+@dataclass
+class TrainingConfig:
+    env_id: str = "hopper-medium-v2"
+    seed: int = 0
+    train_batch_size: int = 256
+    n_train_steps: int = int(200e3)
+    model_type: str = "behavior-cloning"
+    learning_rate: float = 3e-4
+    weight_decay: float = 0
+    wandb_track: bool = True
+    lr_warmup_steps: int = 100000
+    checkpointing_freq: int = 20_000
+    horizon: int = 1
+    num_workers: int = 1
 
-    for t in range(T):
-        norm_obs = normalize(torch.from_numpy(obs).float(), dataset.obs_mean, dataset.obs_std)
-        with torch.no_grad():
-            action = actor(norm_obs.to(device)).cpu()
-        if de_normalize_actions:
-            action = de_normalize(action, dataset.actions_mean, dataset.actions_std)
-        obs, reward, done, info = env.step(action.numpy())
-        
-        rollout.append(obs.copy())
-        
-        cum_reward += reward
-        # if done:
-            # break
-    
-    if render:
-        show_sample(render, [rollout], filename=filename)
-
-    return cum_reward
+    # eval params
+    run_eval_only: bool = False
+    n_episodes: int = 1  # number of episodes to evaluate
+    max_episode_length: int = 1000
+    render: bool = True
+    render_steps: int = 1000
+    file_name_render: Optional[str] = None
+    pretrained_model: Optional[str] = None
+    checkpoint_model: Optional[str] = None
 
 
 if __name__ == "__main__":
-    env_name = "hopper-medium-v2"
-    num_epochs = 20
-    num_inference_steps = 1000
-    run_eval_only = True
-    eval_iters = 50
-    render = False
-    pretrained_model_path = "bc_hopper-medium-v2_epoch13.safetensors"
-    normalize_state_actions = True
+    config = tyro.cli(TrainingConfig)
+    set_seed(config.seed); torch.backends.cudnn.deterministic = True
 
-    seed = 0
-    torch_deterministic = True
-    cuda = True
+    run_id = int(time.time())
+    save_path = f"runs/{config.env_id}/{config.model_type}_{run_id}"
+    while os.path.exists(save_path):
+        run_id = int(time.time())
+        save_path = f"runs/{config.env_id}/{config.model_type}_{run_id}"
+    os.makedirs(save_path, exist_ok=True)
+    config.output_dir = save_path
+    checkpoint_path = f"{save_path}/checkpoints"
+    os.makedirs(checkpoint_path)
 
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.backends.cudnn.deterministic = torch_deterministic
+    dataset = SequenceDataset(config.env_id, horizon=config.horizon, normalizer="GaussianNormalizer", seed=config.seed)
+    train_dataloader = cycle (torch.utils.data.DataLoader(
+        dataset, batch_size=config.train_batch_size, num_workers=config.num_workers, shuffle=True, pin_memory=True
+        ))
 
-    device = torch.device("cuda" if torch.cuda.is_available() and cuda else "cpu")
+    network = Network(dataset.observation_dim, dataset.action_dim).to(device)
+    n_trainable = sum(p.numel() for p in network.parameters() if p.requires_grad)
+    print('trainable params:', n_trainable)
 
-    env = gym.make(env_name)
-    data_dict = env.get_dataset() # dataset is only used for normalization in this colab
-    # eval_env = gym.make("Hopper-v3") # TODO:not sure about this 
+    ############ Evaluation ############
+    if config.run_eval_only:
 
-    dataset = RLDataset(data_dict,
-                        normalize_obs=normalize_state_actions,
-                        normalize_actions=normalize_state_actions)
-    loader = DataLoader(dataset, batch_size=64, shuffle=True, drop_last=True)
+        # check if file exists
+        file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_model) + "_render"
+        if os.path.exists(file_name_render + ".mp4") or os.path.exists(file_name_render + ".png"):
+            print(f"File {file_name_render} already exists. Exiting.")
+            exit()
 
-    actor = HopperNet(env.observation_space.shape[0], env.action_space.shape[0])
-    actor = actor.to(device)
+        if config.render:
+            renderer = MuJoCoRenderer(config.env_id)
 
-    if run_eval_only:
-
-        scores = []
-        for i in range(eval_iters):
-            with open(pretrained_model_path, "rb") as f:
-                data = f.read()
-            actor.load_state_dict(load(data))
-
-            cum_reward = evaluate(env, actor,
-                                T=num_inference_steps,
-                                render=MuJoCoRenderer(env) if render else False,
-                                filename=str(i) + "-" + os.path.basename(pretrained_model_path).replace(".safetensors", ".mp4"))
-            score = env.get_normalized_score(cum_reward)
-
-            scores.append(score)
-
-            print(
-                f"Total Reward: {cum_reward}, Score: {score}"
+        model_path = os.path.join(config.pretrained_model, f"checkpoints/model_{config.checkpoint_model}.pth")
+        print("Loading model from", model_path)
+        with open(model_path, "rb") as f:
+            data = f.read()
+        network.load_state_dict(load(data))
+        
+        if config.wandb_track:
+            wandb.init(
+                config=config,
+                name=str(run_id),
+                project="diffusion_testing",
+                entity="pgm-diffusion"
             )
 
-        print("Average Score: ", np.mean(scores), "Std: ", np.std(scores))
+        env = dataset.env
 
-    else:    
-        optimizer = optim.AdamW(actor.parameters(), lr=1e-4, weight_decay=1e-4)
-        warmup_steps = 100000 # TODO: check this
-        scheduler = optim.lr_scheduler.LambdaLR(
+        ep_returns = []
+        ep_scores = []
+
+        if config.n_episodes > 1:
+            seeds = np.arange(config.n_episodes, dtype=int)
+        else:
+            seeds = [config.seed]
+
+        for seed in seeds:
+            set_seed(int(seed))
+            env.seed(int(seed))
+            obs = env.reset()
+            total_reward = 0
+            total_score = 0
+            rollout = [obs.copy()]
+
+            image = None
+            for t in tqdm.tqdm(range(config.max_episode_length)):
+
+                norm_obs = torch.from_numpy(dataset.normalizer.normalize(obs, 'observations')).float()
+
+                with torch.no_grad():
+                    action = network(norm_obs.to(device)).cpu()
+
+                denorm_actions = dataset.normalizer.unnormalize(action, 'actions').numpy()
+
+                # execute action in environment
+                next_observation, reward, terminal, _ = env.step(denorm_actions)
+                # update return
+                total_reward += reward
+                # save observations for rendering
+                rollout.append(next_observation.copy())
+                
+                obs = next_observation
+
+                if terminal:
+                    if config.render:
+                        show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
+                        image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])  
+                    break
+                if config.render and ((t+1) % config.render_steps == 0 or t == config.max_episode_length - 1): 
+                    show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
+                    image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
+
+            normalized_score = env.get_normalized_score(total_reward)
+            ep_returns.append(total_reward)
+            ep_scores.append(normalized_score)
+
+            print(f"Total reward: {total_reward}, Score: {env.get_normalized_score(total_reward)}")
+            if config.wandb_track:
+                logs = {"score": normalized_score, "total_reward":total_reward, 'seed': seed}
+                if image is not None:
+                    logs['image'] = wandb.Image(image, caption=f"composite {seed}", file_type="png")
+                wandb.log(logs)
+
+        if config.wandb_track:
+            wandb.summary["avg_return"] = np.mean(ep_returns)
+            wandb.summary["avg_return"] = np.std(ep_returns)
+            wandb.summary["avg_score"] = np.mean(ep_scores)
+            wandb.summary["std_score"] = np.std(ep_scores) 
+
+    ############ Training ############
+    else:
+        optimizer = optim.Adam(network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
+        lr_scheduler = optim.lr_scheduler.LambdaLR(
             optimizer,
-            lambda steps: min((steps+1)/warmup_steps, 1)
+            lambda steps: min((steps+1)/config.lr_warmup_steps, 1)
         )
 
-        step = 0
-        for epoch in range(num_epochs):
-            for obs, true_actions in tqdm(loader):
-                obs, true_actions = obs.to(device), true_actions.to(device)
-
-                pred_actions = actor(obs)
-
-                optimizer.zero_grad()
-                loss = F.mse_loss(pred_actions, true_actions)
-                loss.backward()
-                optimizer.step()
-                scheduler.step()
-
-                step+=1
-
-            cum_reward = evaluate(env, actor, T=num_inference_steps, de_normalize_actions=normalize_state_actions)
-            score = env.get_normalized_score(cum_reward)
-
-            print(
-                f"Epoch: {epoch}, Step: {step}, Loss: {loss.item()}, Total Reward: {cum_reward}, Score: {score}"
+        if config.wandb_track:
+            wandb.init(
+                config=config,
+                name=str(run_id),
+                project="diffusion_training",
+                entity="pgm-diffusion"
             )
+            wandb.config["optimizer"] = optimizer.__class__.__name__
+        
+        for i in tqdm.tqdm(range(int(config.n_train_steps))):
+            batch = next(train_dataloader)
+            trajectories = batch.trajectories.to(device)
 
-            save_file(actor.state_dict(), f"bc_{env_name}_epoch{epoch}.safetensors")
+            actions = trajectories[:,0, :dataset.action_dim]
+            obs = trajectories[:,0, dataset.action_dim:]
+
+            pred_actions = network(obs)
+
+            loss = F.mse_loss(pred_actions, actions)
+            loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+
+            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": i}
+            if config.wandb_track:
+                wandb.log(logs, step=i)
+
+            if (i+1) % config.checkpointing_freq == 0 :
+                model_checkpoint_name = f"model_{i}.pth"
+                save_file(network.state_dict(), f"{checkpoint_path}/{model_checkpoint_name}")
+                print("saved")
+
+        print("Training Done:", save_path)

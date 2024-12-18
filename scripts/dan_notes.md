@@ -151,3 +151,16 @@ python scripts/train_hf_action_unet.py --env_id halfcheetah-medium-v2 --train_ba
 python scripts/train_hf_value.py --env_id hopper-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --arch_type unet --seed 0
 python scripts/train_hf_value.py --env_id walker2d-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --arch_type unet --seed 0
 python scripts/train_hf_value.py --env_id halfcheetah-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --arch_type unet --seed 0
+
+# Behavior cloning 
+
+## training
+python scripts/bc_d4rl.py --env_id hopper-medium-v2 --train_batch_size 256 --horizon 1 --seed 0 --checkpointing_freq 50000 --n_train_steps 1000000
+python scripts/bc_d4rl.py --env_id walker2d-medium-v2 --train_batch_size 256 --horizon 1 --seed 0 --checkpointing_freq 50000 --n_train_steps 1000000
+python scripts/bc_d4rl.py --env_id halfcheetah-medium-v2 --train_batch_size 256 --horizon 1 --seed 0 --checkpointing_freq 50000 --n_train_steps 1000000
+
+## evaluation
+python scripts/bc_d4rl.py --env_id hopper-medium-v2 --run_eval_only --n_episodes 5 --render --seed 0 --render_steps 1000 --pretrained_model runs/hopper-medium-v2/behavior-cloning_1734494380 --checkpoint_model 799999
+python scripts/bc_d4rl.py --env_id walker2d-medium-v2 --run_eval_only --n_episodes 5 --render --seed 0 --render_steps 1000 --pretrained_model runs/walker2d-medium-v2/behavior-cloning_1734494500 --checkpoint_model 799999
+python scripts/bc_d4rl.py --env_id halfcheetah-medium-v2 --run_eval_only --n_episodes 5 --render --seed 0 --render_steps 1000 --pretrained_model runs/halfcheetah-medium-v2/behavior-cloning_1734494553 --checkpoint_model 799999
+

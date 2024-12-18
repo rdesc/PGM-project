@@ -95,6 +95,7 @@ class TrainingConfig:
     torch_compile: bool = True
     seed: int = 0
     wandb_track: bool = True
+    n_episodes: int = 1
 
 
 if __name__ == "__main__":
@@ -133,15 +134,10 @@ if __name__ == "__main__":
     action_model = UNet1DModel.from_pretrained(os.path.join(config.pretrained_act_model, "checkpoints/model_{}.pth".format(config.checkpoint_act_model))).to(device)
 
     print("\nLoading dynamics diffusion model from", config.pretrained_dyn_model, config.checkpoint_dyn_model)
-    dynamics_model = UNet1DModel.from_pretrained(os.path.join(config.pretrained_dyn_model, "checkpoints/model_{}.pth".format(config.checkpoint_dynamics_model))).to(device)
+    dynamics_model = UNet1DModel.from_pretrained(os.path.join(config.pretrained_dyn_model, "checkpoints/model_{}.pth".format(config.checkpoint_dyn_model))).to(device)
     
-    # NOTE: use same scheduler for both models
-    if config.ddim:
-        scheduler_dyn = DDIMScheduler.from_pretrained(config.pretrained_dyn_model)
-        scheduler_act = DDIMScheduler.from_pretrained(config.pretrained_act_model)
-    else:
-        scheduler_dyn = DDPMScheduler.from_pretrained(config.pretrained_dyn_model)
-        scheduler_act = DDPMScheduler.from_pretrained(config.pretrained_act_model)
+    scheduler_dyn = DDPMScheduler.from_pretrained(config.pretrained_dyn_model)
+    scheduler_act = DDPMScheduler.from_pretrained(config.pretrained_act_model)
 
     scheduler_dyn.set_timesteps(config.num_inference_steps)
     scheduler_act.set_timesteps(config.num_inference_steps)
@@ -186,8 +182,8 @@ if __name__ == "__main__":
 
             initial_state = torch.from_numpy(norm_observation).to(device)
             
-            actions = generate_actions(initial_state, action_model, dataset, scheduler, config.batch_size, config.horizon)
-            samples = generate_samples(initial_state, actions, dynamics_model, dataset, scheduler, config.batch_size, config.horizon)
+            actions = generate_actions(initial_state, action_model, dataset, scheduler_act, config.batch_size, config.horizon)
+            samples = generate_samples(initial_state, actions, dynamics_model, dataset, scheduler_dyn, config.batch_size, config.horizon)
 
             # sample score and rank
             # get values of samples
@@ -198,7 +194,7 @@ if __name__ == "__main__":
             # extract actions
             normed_actions = sorted_samples[:, 0, :dataset.action_dim ]
             best_action = normed_actions[0].cpu().numpy()
-            denorm_action = dataset.normalizer.unnormalize(best_action, 'actions')
+            denorm_actions = dataset.normalizer.unnormalize(best_action, 'actions')
 
             next_observation, reward, terminal, _ = env.step(denorm_actions)
             # update return
