@@ -156,7 +156,6 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
         sorted_values = x[sorted_idx]
         actions = sorted_values[:, :, : self.action_dim]
         actions = actions.detach().cpu().numpy()
-        denorm_actions = self.de_normalize(actions, key="actions")
 
         # select the action with the highest value
         if y is not None:
@@ -165,5 +164,6 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
             # if we didn't run value guiding, select a random action
             selected_index = np.random.randint(0, batch_size)
 
-        denorm_actions = denorm_actions[selected_index, 0]
-        return denorm_actions
+        action = actions[selected_index, 0]
+        denorm_action = self.de_normalize(action, key="actions")
+        return denorm_action
