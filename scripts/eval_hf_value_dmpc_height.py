@@ -129,7 +129,7 @@ def f_novel(obs, target_height, config):
 if __name__ == "__main__":
     config = tyro.cli(TrainingConfig)
     run_id = int(time.time())
-    assert 'walker2d' in config.env_name, 'height implemented for walker2d'
+    # assert 'walker2d' in config.env_name, 'height implemented for walker2d'
 
     set_seed(config.seed)
 
