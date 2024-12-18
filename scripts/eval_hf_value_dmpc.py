@@ -79,7 +79,7 @@ def pipeline(obs, action_model, dyanmics_model,
 
 @dataclass
 class TrainingConfig:
-    env_id: str = "hopper-medium-v2"
+    env_name: str = "hopper-medium-v2"
     """Name of the environment"""
     file_name_render: Optional[str] = None
     batch_size: int = 64  # the number of samples to generate, selects the best action
