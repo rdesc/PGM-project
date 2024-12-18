@@ -14,7 +14,7 @@ from diffusers import  UNet1DModel, DDPMScheduler, DDPMPipeline
 from diffuser.datasets import ValueDataset
 from diffuser.utils.rendering import MuJoCoRenderer
 from diffuser.utils import set_seed
-from scripts.train_bc import show_sample
+from scripts.bc_d4rl import show_sample
 import wandb
 import tyro
 
@@ -75,12 +75,11 @@ class TrainingConfig:
     """Name of the environment"""
     file_name_render: Optional[str] = None
     batch_size: int = 64  # for sample-score-rank -- the number of samples to generate, selects the best action
-    horizon: int = 32  
+    planning_horizon: int = 32  
     max_episode_length: int = 1000
     # this needs to be <= num_train_timesteps used during training, D-MPC uses 32 diffusion steps for action model and 10 diffusion steps for dynamics model
     # can maybe simplify eval by using the same number of steps for both models (for now)
     num_inference_steps: int = 32
-    render_steps: int = 50
     history: int = 0  # disabled for now, set to 0
     
     pretrained_value_model: str = ''
@@ -95,6 +94,8 @@ class TrainingConfig:
     torch_compile: bool = True
     seed: int = 0
     wandb_track: bool = True
+    render: bool = True
+    render_steps: int = 50
     n_episodes: int = 1
 
 
@@ -104,13 +105,6 @@ if __name__ == "__main__":
     set_seed(config.seed)
 
     run_id = int(time.time())
-    if config.wandb_track:
-        wandb.init(
-            config=config,
-            name=f"eval_dmpc_{run_id}",
-            project="diffusion_training",
-            entity="pgm-diffusion"
-        )
 
     # check if file exists
     file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_value_model) + "_render"
@@ -119,7 +113,7 @@ if __name__ == "__main__":
         exit()
 
     env_id = config.env_id
-    dataset = ValueDataset(env_id, horizon=config.horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)  # TODO: add config param for discount
+    dataset = ValueDataset(env_id, horizon=config.planning_horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)  # TODO: add config param for discount
     env = gym.make(env_id)
     env.seed(config.seed)
     renderer = MuJoCoRenderer(env_id)
@@ -182,8 +176,8 @@ if __name__ == "__main__":
 
             initial_state = torch.from_numpy(norm_observation).to(device)
             
-            actions = generate_actions(initial_state, action_model, dataset, scheduler_act, config.batch_size, config.horizon)
-            samples = generate_samples(initial_state, actions, dynamics_model, dataset, scheduler_dyn, config.batch_size, config.horizon)
+            actions = generate_actions(initial_state, action_model, dataset, scheduler_act, config.batch_size, config.planning_horizon)
+            samples = generate_samples(initial_state, actions, dynamics_model, dataset, scheduler_dyn, config.batch_size, config.planning_horizon)
 
             # sample score and rank
             # get values of samples
@@ -216,7 +210,7 @@ if __name__ == "__main__":
                     show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
                     image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])  
                 break
-            if config.render and (t+1) % config.render_steps == 0: 
+            if config.render and ((t+1) % config.render_steps == 0 or t == config.max_episode_length - 1): 
                 show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
                 image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
 

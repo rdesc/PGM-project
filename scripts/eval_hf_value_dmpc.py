@@ -79,7 +79,7 @@ def pipeline(obs, action_model, dyanmics_model,
 
 @dataclass
 class TrainingConfig:
-    env_name: str = "hopper-medium-v2"
+    env_id: str = "hopper-medium-v2"
     """Name of the environment"""
     file_name_render: Optional[str] = None
     batch_size: int = 64  # the number of samples to generate, selects the best action
@@ -108,7 +108,7 @@ if __name__ == "__main__":
 
     set_seed(config.seed)
 
-    env_name = config.env_name
+    env_id = config.env_id
 
     # check if file exists
     file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_value_model or config.hf_repo) + "_render"
@@ -116,9 +116,9 @@ if __name__ == "__main__":
         print(f"File {file_name_render} already exists. Exiting.")
         exit()
 
-    dataset = ValueDataset(env_name, horizon=config.planning_horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)
+    dataset = ValueDataset(env_id, horizon=config.planning_horizon, normalizer="GaussianNormalizer" , termination_penalty=-100, discount=0.997, seed=config.seed)
     env = dataset.env
-    renderer = MuJoCoRenderer(env_name)
+    renderer = MuJoCoRenderer(env_id)
 
     device = "cpu" if not torch.cuda.is_available() else "cuda"
 
@@ -128,9 +128,12 @@ if __name__ == "__main__":
                                                 subfolder="ema" if config.use_ema else "transformer", variant=str(config.checkpoint_value_model)).to(device)
 
     # Load action model
+    print("\nLoading action diffusion model from", config.pretrained_act_model, config.checkpoint_act_model)
     ema_str = "_ema" if config.use_ema else ""
     model_act_path = os.path.join(config.pretrained_act_model, f"checkpoints/model_{config.checkpoint_act_model}{ema_str}.pth")
     action_model = ActionProposalTransformer.from_pretrained(model_act_path).to(device)
+
+    print("\nLoading dynamics diffusion model from", config.pretrained_dyn_model, config.checkpoint_dyn_model)
     model_dyn_path = os.path.join(config.pretrained_dyn_model, f"checkpoints/model_{config.checkpoint_dyn_model}{ema_str}.pth")
     dyanmics_model = DynamicsTransformer.from_pretrained(model_dyn_path).to(device)
     
@@ -209,7 +212,7 @@ if __name__ == "__main__":
                     show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
                     image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])  
                 break
-            if config.render and (t+1) % config.render_steps == 0: 
+            if config.render and ((t+1) % config.render_steps == 0 or t == config.max_episode_length - 1): 
                 show_sample(renderer, [rollout], filename=f"{file_name_render}.mp4", savebase="./renders")
                 image = renderer.composite(f"./renders/{file_name_render}.png", np.array(rollout)[None])
         normalized_score = env.get_normalized_score(total_reward)

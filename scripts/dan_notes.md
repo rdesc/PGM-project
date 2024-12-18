@@ -156,6 +156,12 @@ python scripts/train_hf_value.py --env_id hopper-medium-v2 --train_batch_size 64
 python scripts/train_hf_value.py --env_id walker2d-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --arch_type unet --seed 0
 python scripts/train_hf_value.py --env_id halfcheetah-medium-v2 --train_batch_size 64 --horizon 32 --num_train_timesteps 20 --arch_type unet --seed 0
 
+## evaluation
+python scripts/eval_hf_value_dmpc_unet.py --env_id hopper-medium-v2 --pretrained_act_model runs/hopper-medium-v2/action_unet_1734465526  --checkpoint_act_model 799999 --pretrained_dyn_model runs/hopper-medium-v2/dynamics_unet_1734415099 --checkpoint_dyn_model 799999 --pretrained_value_model runs/hopper-medium-v2/value_1734390656 --checkpoint_value_model 180000 --seed 0 --num_inference_steps 20 --use_ema --planning_horizon 32 --n_episodes 5 --render_steps 1000
+python scripts/eval_hf_value_dmpc_unet.py --env_id walker2d-medium-v2 --pretrained_act_model runs/walker2d-medium-v2/action_unet_1734466176  --checkpoint_act_model 799999 --pretrained_dyn_model runs/walker2d-medium-v2/dynamics_unet_1734415238 --checkpoint_dyn_model 799999 --pretrained_value_model runs/walker2d-medium-v2/value_1734390664 --checkpoint_value_model 180000 --seed 0 --num_inference_steps 20 --use_ema --planning_horizon 32 --n_episodes 5 --render_steps 1000
+python scripts/eval_hf_value_dmpc_unet.py --env_id halfcheetah-medium-v2 --pretrained_act_model runs/halfcheetah-medium-v2/action_unet_1734466190  --checkpoint_act_model 799999 --pretrained_dyn_model runs/halfcheetah-medium-v2/dynamics_unet_1734415258 --checkpoint_dyn_model 799999 --pretrained_value_model runs/halfcheetah-medium-v2/value_1734390667 --checkpoint_value_model 180000 --seed 0 --num_inference_steps 20 --use_ema --planning_horizon 32 --n_episodes 5 --render_steps 1000
+
+
 # Behavior cloning 
 
 ## training
