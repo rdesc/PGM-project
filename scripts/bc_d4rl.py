@@ -70,6 +70,7 @@ def show_sample(renderer, observations, filename='sample.mp4', savebase='./'):
     media.write_video(savepath, images, fps=60)
 
     print('Saved video to', savepath)
+    return savepath
 
 
 @dataclass

@@ -118,6 +118,10 @@ python scripts/eval_hf_value_dmpc.py --env_name walker2d-medium-v2  --use-ema --
 cheetah
 python scripts/eval_hf_value_dmpc.py --env_name halfcheetah-medium-v2 --use-ema --num_inference_steps 20 --file_name_render test_transformer_combos0 --seed 0 --pretrained_value_model runs/halfcheetah-medium-v2/value_1734390656 --checkpoint_value_model=180000 --pretrained_act_model runs/halfcheetah-medium-v2/1734401044 --checkpoint_act_model=799999 --pretrained_dyn_model runs/halfcheetah-medium-v2/1734407834 --checkpoint_dyn_model=799999 --n_episodes=5 --render_steps=2000
 
+## eval reward gen
+python scripts/eval_hf_value_dmpc_height.py --env_name walker2d-medium-v2  --use-ema --num_inference_steps 20 --file_name_render height --seed 0 --pretrained_value_model runs/walker2d-medium-v2/value_1734398105 --checkpoint_value_model=180000 --pretrained_act_model runs/walker2d-medium-v2/1734402336 --checkpoint_act_model=799999 --pretrained_dyn_model runs/walker2d-medium-v2/1734404160 --checkpoint_dyn_model=799999 --render_steps=50 --target_height 0.9 --sigma2 0.0005
+
+python scripts/eval_hf_value_dmpc_height.py --env_name halfcheetah-medium-v2 --use-ema --num_inference_steps 20 --file_name_render height_cheetah --seed 0 --pretrained_value_model runs/halfcheetah-medium-v2/value_1734390656 --checkpoint_value_model=180000 --pretrained_act_model runs/halfcheetah-medium-v2/1734401044 --checkpoint_act_model=799999 --pretrained_dyn_model runs/halfcheetah-medium-v2/1734407834 --checkpoint_dyn_model=799999 --render_steps=50 
 
 
 
