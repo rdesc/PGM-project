@@ -110,6 +110,7 @@ def show_sample(renderer, observations, filename='sample.mp4', savebase='./'):
     media.write_video(savepath, images, fps=60)
 
     print('Saved video to', savepath)
+    return savepath
 
 
 def evaluate(env, actor, T=1000, render=False, filename='bc_sample.mp4', de_normalize_actions=False):
