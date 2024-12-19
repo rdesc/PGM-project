@@ -154,7 +154,10 @@ class ValueGuidedRLPipeline(DiffusionPipeline):
         # sort output trajectories by value
         sorted_idx = y.argsort(0, descending=True).squeeze()
         sorted_values = x[sorted_idx]
-        actions = sorted_values[:, :, : self.action_dim]
+        if batch_size == 1:
+            actions = sorted_values[:, : self.action_dim]
+        else:
+            actions = sorted_values[:, :, : self.action_dim]
         actions = actions.detach().cpu().numpy()
 
         # select the action with the highest value
