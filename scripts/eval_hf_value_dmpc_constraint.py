@@ -77,9 +77,18 @@ def pipeline(obs, action_model, dyanmics_model,
     denorm_action = dataset.normalizer.unnormalize(best_normed_action, 'actions')
     return denorm_action
 
+
+
+def apply_constraint(action, action_ind=2, clip_range=(-0.5, 0.5)):
+    constrained_action = action.copy()
+    constrained_action[action_ind] = np.clip(constrained_action[action_ind], clip_range[0], clip_range[-1])
+    return constrained_action
+
+
+
 @dataclass
 class TrainingConfig:
-    env_name: str = "hopper-medium-v2"
+    env_id: str = "hopper-medium-v2"
     """Name of the environment"""
     file_name_render: Optional[str] = None
     batch_size: int = 64  # the number of samples to generate, selects the best action
@@ -108,7 +117,7 @@ if __name__ == "__main__":
 
     set_seed(config.seed)
 
-    env_id = config.env_name
+    env_id = config.env_id
 
     # check if file exists
     file_name_render = config.file_name_render if config.file_name_render else os.path.basename(config.pretrained_value_model or config.hf_repo) + "_render"
@@ -168,6 +177,11 @@ if __name__ == "__main__":
     ep_returns = []
     ep_scores = []
 
+
+    observation_list = []
+    action_list = []
+    reward_list = []
+    terminal_list = []
     if config.n_episodes > 1:
         seeds = np.arange(config.n_episodes, dtype=int)
     else:
@@ -177,12 +191,14 @@ if __name__ == "__main__":
         set_seed(int(seed))
         env.seed(int(seed))
         obs = env.reset()
+
         total_reward = 0
         total_score = 0
         rollout = [obs.copy()]
 
         image = None
         for t in tqdm.tqdm(range(config.max_episode_length)):
+            observation_list.append(obs.copy())
             # call the policy
             denorm_actions = pipeline(
                 obs,
@@ -191,8 +207,14 @@ if __name__ == "__main__":
                 dataset, config
             )
 
+            constrained_action = apply_constraint(denorm_actions, 2, (-0.5, 0.5))
+            action_list.append(constrained_action.copy())
+
             # execute action in environment
-            next_observation, reward, terminal, _ = env.step(denorm_actions)
+            next_observation, reward, terminal, _ = env.step(constrained_action)
+            reward_list.append(reward.copy())
+            terminal_list.append(terminal)
+            
             # update return
             total_reward += reward
             # compute score
@@ -233,3 +255,14 @@ if __name__ == "__main__":
         wandb.summary["avg_return"] = np.std(ep_returns)
         wandb.summary["avg_score"] = np.mean(ep_scores)
         wandb.summary["std_score"] = np.std(ep_scores) 
+
+
+    traj_dict = {
+        "observations" : np.stack(observation_list, axis=0),
+        "actions" : np.stack(action_list, axis=0),
+        "rewards" : np.stack(reward_list, axis=0),
+        "terminals" : np.stack(terminal_list, axis=0)
+    }
+    import pickle
+    with open(f"{config.env_id}_{config.seed}_data.pkl", "wb") as f:
+        pickle.dump(traj_dict, f)
