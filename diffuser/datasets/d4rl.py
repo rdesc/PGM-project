@@ -69,7 +69,6 @@ def sequence_dataset(env, preprocess_fn):
     """
     dataset = get_dataset(env)
     dataset = preprocess_fn(dataset)
-
     N = dataset['rewards'].shape[0]
     data_ = collections.defaultdict(list)
 
@@ -117,3 +116,72 @@ def process_maze2d_episode(episode):
         episode[key] = val[:-1]
     episode['next_observations'] = next_observations
     return episode
+
+
+
+def load_dataset(data_path_list, max_ep_steps, preprocess_fn):
+    """
+    Returns an iterator through trajectories.
+    Args:
+        env: An OfflineEnv object.
+        dataset: An optional dataset to pass in for processing. If None,
+            the dataset will default to env.get_dataset()
+        **kwargs: Arguments to pass to env.get_dataset().
+    Returns:
+        An iterator through dictionaries with keys:
+            observations
+            actions
+            rewards
+            terminals
+    """
+    import pickle
+    dataset = {
+        "observations": [],
+        "actions": [],
+        "rewards": [],
+        "terminals": [],
+    }
+
+    for data_path in data_path_list:
+        with open(data_path, "rb") as f:
+            data = pickle.load(f)
+        dataset["observations"].append(data["observations"])
+        dataset["actions"].append(data["actions"])
+        dataset["rewards"].append(data["rewards"])
+        dataset["terminals"].append(data["terminals"])
+
+    dataset["observations"] = np.concatenate(dataset["observations"], axis=0)
+    dataset["actions"] = np.concatenate(dataset["actions"], axis=0)
+    dataset["rewards"] = np.concatenate(dataset["rewards"], axis=0)
+    dataset["terminals"] = np.concatenate(dataset["terminals"], axis=0)
+
+    dataset = preprocess_fn(dataset)
+    N = dataset['rewards'].shape[0]
+    data_ = collections.defaultdict(list)
+
+    # The newer version of the dataset adds an explicit
+    # timeouts field. Keep old method for backwards compatability.
+    use_timeouts = 'timeouts' in dataset
+    print(use_timeouts)
+
+    episode_step = 0
+    for i in range(N):
+        done_bool = bool(dataset['terminals'][i])
+        if use_timeouts:
+            final_timestep = dataset['timeouts'][i]
+        else:
+            final_timestep = (episode_step == max_ep_steps - 1)
+
+        for k in dataset:
+            if 'metadata' in k: continue
+            data_[k].append(dataset[k][i])
+
+        if done_bool or final_timestep:
+            episode_step = 0
+            episode_data = {}
+            for k in data_:
+                episode_data[k] = np.array(data_[k])
+            yield episode_data
+            data_ = collections.defaultdict(list)
+
+        episode_step += 1
