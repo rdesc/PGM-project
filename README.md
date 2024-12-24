@@ -30,4 +30,4 @@ scripts/bc_d4rl.py
 
 ## Acknowledgements
 
-Our implementation is based on the original [Diffusser codebase](https://github.com/jannerm/diffuser).
+Our implementation is based on the original [Diffusser codebase](https://github.com/jannerm/diffuser), and we reference Hugging Face Diffuser's [value-guided planning](https://huggingface.co/docs/diffusers/v0.16.0/en/using-diffusers/rl).
