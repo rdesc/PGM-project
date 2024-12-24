@@ -4,15 +4,37 @@ conda env create -f env.yaml
 conda activate diffuser
 pip install -e .
 ```
-The new files for the project 
+The new files for the project are located in the scripts folder:
 ```
-srcipts/train_hf.py
-scripts/train_hf_value.py
-srcipts/plan_guided_hf.py
-scripts/eval_hf_value.py
-scripts/eval_unguided_hf.py
-scripts/bc_d4rl.py
+bc_d4rl.py
+dan_notes.md
+eval_diffuser.sh
+eval_hf_value_debug.py
+eval_hf_value_diffuser.py
+eval_hf_value_dmpc.py
+eval_hf_value_dmpc_constraint.py
+eval_hf_value_dmpc_height.py
+eval_hf_value_dmpc_unet.py
+eval_unguided_hf.py
+plan_guided_df_notebook.ipynb
+plan_guided_diff.py
+plan_guided_hf.py
+plotting
+run_janner_eval.sh
+train
+train_diffuser.sh
+train_hf.py
+train_hf_action_transformer.py
+train_hf_action_unet.py
+train_hf_dynamics_transformer.py
+train_hf_dynamics_unet.py
+train_hf_transformer.py
+train_hf_value.py
+transformer_1d.py
+transformer_block.py
+value_guided_sampling.py
 ```
+Particularly, [dan_notes](https://github.com/rdesc/PGM-project/blob/main/scripts/dan_notes.md) contains most of the commands we used to train and evaluate different models. 
 
 ### This was the state of our project:
 <p align="center">
